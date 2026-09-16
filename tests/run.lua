@@ -205,6 +205,7 @@ do
   -- B 가 구분자 바로 왼쪽. A 만 접힌 구간은 조건을 만족하지 않는다.
   local setWidth, probe = fakeBar.new({
     order = { "H", "A", "B", "SEP", "C" },
+    widths = { A = 150, B = 120 },
     hiddenFor = thresholds({
       { from = 400, hidden = { "H", "A", "B", "SEP" } },
       { from = 250, hidden = { "H", "A", "B" } },
@@ -488,6 +489,7 @@ end
 do
   local spec = {
     order = { "H", "A", "B", "SEP", "C" },
+    widths = { A = 120, B = 120 },
     hiddenFor = thresholds({
       { from = 300, hidden = { "H", "A", "B", "SEP" } },
       { from = 149, hidden = { "H", "A", "B" } },
@@ -500,9 +502,9 @@ do
   eq("hint 적중: 한 걸음", #trace, 1)
 
   local setWidth2, probe2, trace2 = fakeBar.new(spec)
-  local w2 = fit.decide(setWidth2, probe2, { maxWidth = 1512, hint = 400 })   -- 구분자까지 접히는 값
+  local w2 = fit.decide(setWidth2, probe2, { maxWidth = 1512, hint = 350 })   -- 구분자까지 접히는 값
   check("hint 오답(넓음): 그래도 수렴", w2 >= 149 and w2 < 300, "폭 " .. tostring(w2))
-  eq("hint 오답(넓음): 첫 시도는 hint", trace2[1], 400)
+  eq("hint 오답(넓음): 첫 시도는 hint", trace2[1], 350)
 
   local setWidth3, probe3, trace3 = fakeBar.new(spec)
   local w3 = fit.decide(setWidth3, probe3, { maxWidth = 1512, hint = 100 })   -- 아직 안 접히는 값
@@ -550,6 +552,24 @@ do
   check("autoshow: Battery Power 면 배터리 구동", autoshow.onBattery("Battery Power"))
   check("autoshow: AC Power 면 아님", not autoshow.onBattery("AC Power"))
   check("autoshow: nil(배터리 없음)이면 아님", not autoshow.onBattery(nil))
+end
+
+--------------------------------------------------------------------------
+-- 26. 시스템이 접지 않으면(« 없음, 항목이 뒤로 밀리기만 함) 폭 합 + 여유에서 포기한다
+--------------------------------------------------------------------------
+do
+  local setWidth, probe, trace = fakeBar.new({
+    order = { "A", "B", "SEP", "C" },
+    noChevron = true,
+    widths = { A = 40, B = 30 },
+    hiddenFor = function() return nil end,   -- 어떤 폭에서도 아무것도 접히지 않는다
+  })
+  local w, sig = fit.decide(setWidth, probe, { maxWidth = 1512 })
+  eq("폭주 방지: 폭 0 으로 끝난다", w, 0)
+  check("폭주 방지: 실패 서명을 돌려준다", sig ~= nil)
+  local maxTried = 0
+  for _, v in ipairs(trace) do if v > maxTried then maxTried = v end end
+  check("폭주 방지: 폭 합(70) + 여유 안에서 멈춘다", maxTried <= 70 + fit.MAX_OVERSHOOT, "최대 " .. maxTried)
 end
 
 --------------------------------------------------------------------------

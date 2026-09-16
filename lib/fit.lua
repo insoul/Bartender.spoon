@@ -29,6 +29,10 @@ fit.ESTIMATE_OFFSET = 20
 fit.FIRST_STEP = 4
 --- 한 번의 탐색에서 폭을 바꿔 보는 최대 횟수
 fit.MAX_STEPS = 24
+--- 탐색 상한의 여유. 구분자는 자기가 밀어낼 항목 폭 합보다 이만큼 이상 넓어질 필요가 없다.
+--- « 가 없는 상태에서 시스템이 접지 않고 항목을 노치·앱 메뉴 뒤로 밀어내기만 하면 "아직 보인다"
+--- 판정이 끝나지 않는데, 이 상한이 그 폭주를 막는다.
+fit.MAX_OVERSHOOT = 120
 
 local function isHidden(snap, x)
   return snap.chevronX ~= nil and x < snap.chevronX
@@ -176,6 +180,10 @@ function fit.decide(setWidth, probe, opts)
   -- 탐색이 실패하면 폭 0 으로 끝나므로, 다음 호출의 판독도 그 상태에서 시작한다.
   -- 서명은 항목 순서만 담으므로 지금 판독으로 만들어도 같다.
   zeroSig = fit.signature(snap, maxWidth)
+
+  -- 밀어낼 항목 폭 합에 여유를 더한 값이 실질 상한이다. 화면 폭까지 올라갈 이유가 없다.
+  local ceiling = lo + visibleLeftWidth(snap) + fit.MAX_OVERSHOOT
+  if ceiling < maxWidth then maxWidth = ceiling end
 
   -- 폭이 커질수록 왼쪽 항목이 순서대로 접히므로 "구분자 왼쪽에 보이는 항목이 없다"는
   -- 폭에 대해 단조다. 만족 구간은 그 술어가 참이 되는 폭부터 구분자 자신이 접히는 폭

@@ -54,7 +54,7 @@ local DEBOUNCE = 0.5
 --- 앱이 제 항목 폭을 바꾼 경우를 위한 보정 주기
 local CORRECTIVE = 60
 --- 이 시간 안에 탐색이 끝나지 않으면 상태가 굳은 것으로 보고 되돌린다
-local SEARCH_TIMEOUT = 15
+local SEARCH_TIMEOUT = 40
 --- 아이콘 높이. 메뉴바 항목의 표준 높이다
 local ICON_HEIGHT = 22
 
@@ -268,10 +268,12 @@ function obj:fit()
   -- 탐색이 어떤 이유로든 멈추면 running 이 참인 채로 굳어 이후 트리거가 전부 막힌다.
   self.watchdog = hs.timer.doAfter(SEARCH_TIMEOUT, function()
     self.watchdog = nil
-    self:log("탐색이 %d초 안에 끝나지 않았다 — 상태를 초기화한다", SEARCH_TIMEOUT)
+    self:log("탐색이 %d초 안에 끝나지 않았다 — 폭 0 으로 되돌리고 상태를 초기화한다", SEARCH_TIMEOUT)
     self.generation = self.generation + 1   -- 낡은 코루틴을 끊는다
     self.running = false
     self.pending = false
+    -- 탐색 도중의 폭이 남으면 항목이 노치·앱 메뉴 뒤로 밀린 채 굳는다. 안전한 값으로 되돌린다.
+    self:setWidth(0)
     self:schedule()
   end)
 
