@@ -78,7 +78,9 @@ Bartender.spoon/
 ## 테스트
 
 - `fit` 의 결정 로직(다음 폭 선택, 종료 조건)은 판독 함수를 인자로 받는 순수 함수로 분리해
-  가짜 좌표 표로 단위 테스트한다. `lua tests/run.lua` 로 Hammerspoon 없이 실행.
+  가짜 좌표 표로 단위 테스트한다. 독립 lua 인터프리터가 없으므로 Hammerspoon 의 Lua 로 실행한다:
+  `osascript -e 'tell application "Hammerspoon" to execute lua code "return dofile(\"<abs>/tests/run.lua\")"'`.
+  테스트 코드는 `hs.*` 를 쓰지 않는 순수 Lua 로 유지한다.
 - 실제 메뉴바 동작은 `screencapture -R0,0,<width>,30` 으로 수동 확인한다.
 
 ## 범위 밖
