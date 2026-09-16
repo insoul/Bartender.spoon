@@ -23,9 +23,10 @@ local fit = dofile(spoonPath .. "lib/fit.lua")
 local SEP_TOOLTIP = "bartender_sep"
 local SEP_AUTOSAVE = "bartender_sep"
 
---- 접힌 항목이 있을 때만 MenuBarAgent 의 버튼 설명이 이 값이 된다.
---- 접힌 것이 없으면 같은 버튼이 "Hide Menu Bar Items" 로 바뀐다 — 그 상태는 « 없음으로 본다.
-local CHEVRON_DESC = "Show Hidden Menu Bar Items"
+--- MenuBarAgent 의 오버플로 버튼 하나가 설명 문자열로 상태를 알린다.
+--- 접힌 항목이 있으면 « / "Show Hidden…", 없으면 » / "Hide Menu Bar Items".
+local CHEVRON_HIDDEN = "Show Hidden Menu Bar Items"
+local CHEVRON_EXPANDED = "Hide Menu Bar Items"
 
 --- 폭을 바꾼 뒤 메뉴바가 다시 배치될 때까지 기다리는 시간
 local SETTLE = 0.15
@@ -47,10 +48,19 @@ end
 
 --- 코루틴 안에서만 쓴다. 메인 스레드를 막지 않고 기다린다 —
 --- 메뉴바 재배치는 런루프가 돌아야 일어나므로 usleep 으로 막으면 안 된다.
-local function settle(seconds)
+local function sleep(seconds)
   local co = coroutine.running()
   hs.timer.doAfter(seconds, function() coroutine.resume(co) end)
   coroutine.yield()
+end
+
+--- 세대가 바뀐 탐색을 끊을 때 던지는 값. pcall 로 받아 조용히 삼킨다.
+local ABORTED = "bartender:aborted"
+
+--- 탐색 상한. 주 화면 폭이면 어떤 배치에서도 구분자가 메뉴바를 다 덮을 수 있다.
+local function searchLimit()
+  local screen = hs.screen.mainScreen()
+  return screen and screen:frame().w or fit.MAX_WIDTH
 end
 
 --------------------------------------------------------------------------
@@ -60,7 +70,7 @@ end
 --- 모든 실행 중 앱의 AXExtrasMenuBar 자식을 모아 fit.decide 가 쓰는 스냅샷으로 만든다.
 --- key 는 pid 와 앱 안에서의 순서로 만든다 — 제목은 시계처럼 매 초 바뀌는 것이 있어 못 쓴다.
 function obj:probe()
-  local snap = { items = {}, chevronX = nil, sep = nil }
+  local snap = { items = {}, chevronX = nil, expanded = false, sep = nil }
   for _, app in ipairs(hs.application.runningApplications()) do
     local ok, element = pcall(hs.axuielement.applicationElement, app)
     if ok and element then
@@ -70,8 +80,11 @@ function obj:probe()
         for index, child in ipairs(children) do
           local position = child:attributeValue("AXPosition")
           if position then
-            if child:attributeValue("AXDescription") == CHEVRON_DESC then
+            local description = child:attributeValue("AXDescription")
+            if description == CHEVRON_HIDDEN then
               snap.chevronX = position.x
+            elseif description == CHEVRON_EXPANDED then
+              snap.expanded = true
             else
               local entry = { key = string.format("%d:%d", app:pid(), index), x = position.x }
               if child:attributeValue("AXHelp") == SEP_TOOLTIP then
@@ -104,7 +117,17 @@ end
 -- 탐색
 --------------------------------------------------------------------------
 
---- 이분 탐색을 한 번 돌린다. 실행 중이면 끝난 뒤 한 번만 더 돌도록 예약한다.
+--- 같은 말을 연달아 찍지 않는다. 앱 전환마다 트리거가 도는데 상태는 대개 그대로다.
+function obj:log(fmt, ...)
+  local message = string.format(fmt, ...)
+  if message ~= self.lastLog then
+    self.lastLog = message
+    hs.printf("[Bartender] %s", message)
+  end
+end
+
+--- 폭을 한 번 맞춘다. 지금 상태가 이미 목표면 아무것도 바꾸지 않는다.
+--- 실행 중이면 끝난 뒤 한 번만 더 돌도록 예약한다.
 function obj:fit()
   if self.running then
     self.pending = true
@@ -113,21 +136,32 @@ function obj:fit()
   if not self.sep then return self end
   self.running = true
 
+  -- 이 탐색의 세대. stop()/start() 가 세대를 올리면 기다리던 코루틴이 스스로 끊는다.
+  local generation = self.generation
+
+  local function apply(w)
+    if self.generation ~= generation then error(ABORTED, 0) end
+    self:setWidth(w)
+    sleep(SETTLE)
+    if self.generation ~= generation then error(ABORTED, 0) end
+  end
+
   local co = coroutine.create(function()
     local ok, result = pcall(function()
-      return fit.decide(
-        function(w)
-          self:setWidth(w)
-          settle(SETTLE)
-        end,
-        function() return self:probe() end,
-        { log = function(fmt, ...) hs.printf("[Bartender] " .. fmt, ...) end }
-      )
+      return fit.decide(apply, function() return self:probe() end, {
+        maxWidth = searchLimit(),
+        currentWidth = self.width,
+        log = function(fmt, ...) self:log(fmt, ...) end,
+      })
     end)
+
+    -- 세대가 바뀌었으면 이 탐색은 이미 주인이 아니다. 상태를 건드리지 않고 사라진다.
+    if self.generation ~= generation then return end
+
     self.running = false
     if ok then
       self.lastWidth = result
-    else
+    elseif result ~= ABORTED then
       hs.printf("[Bartender] 탐색 실패: %s", tostring(result))
     end
     if self.pending then
@@ -160,11 +194,15 @@ function obj:init()
   self.lastWidth = 0
   self.running = false
   self.pending = false
+  self.generation = 0
+  self.lastLog = nil
   return self
 end
 
 function obj:start()
   if self.sep then return self end
+  self.generation = self.generation + 1
+  self.lastLog = nil
 
   -- autosaveName 을 주면 ⌘+드래그로 정한 자리가 재시작 후에도 유지된다.
   self.sep = hs.menubar.new(true, SEP_AUTOSAVE)
@@ -195,6 +233,7 @@ function obj:start()
 end
 
 function obj:stop()
+  self.generation = self.generation + 1
   if self.debounce then self.debounce:stop(); self.debounce = nil end
   if self.correctiveTimer then self.correctiveTimer:stop(); self.correctiveTimer = nil end
   if self.screenWatcher then self.screenWatcher:stop(); self.screenWatcher = nil end
