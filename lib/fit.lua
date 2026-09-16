@@ -85,7 +85,9 @@ end
 --- @param opts table|nil {maxWidth=, tolerance=, currentWidth=, lastFailSig=, log=function(fmt, ...)}
 --- @return number 적용한 폭
 --- @return string|nil 탐색이 실패한 배치의 서명. 다음 호출에 opts.lastFailSig 로 돌려주면
----                    같은 배치에서 같은 탐색을 되풀이하지 않는다. nil 이면 기억을 지운다
+---                    같은 배치에서 같은 탐색을 되풀이하지 않는다. nil 이면 기억을 지운다.
+---                    판단이 선 경로(만족·수렴)만 nil 을 돌려주고, 아무것도 알아내지 못한
+---                    경로는 받은 opts.lastFailSig 를 그대로 되돌려 기억을 유지한다
 function fit.decide(setWidth, probe, opts)
   opts = opts or {}
   local maxWidth = opts.maxWidth or fit.MAX_WIDTH
@@ -93,19 +95,22 @@ function fit.decide(setWidth, probe, opts)
   local currentWidth = opts.currentWidth or 0
   local log = opts.log or function() end
 
+  -- 아무것도 판단하지 못한 경로는 기억한 실패 서명을 그대로 돌려준다.
+  -- 여기서 nil 을 돌려주면 기억이 지워져, 상황이 돌아왔을 때 같은 헛탐색을 다시 돈다.
   local snap = probe()
   if snap == nil or snap.sep == nil then
     log("구분자를 메뉴바에서 찾지 못했다")
-    return currentWidth
+    return currentWidth, opts.lastFailSig
   end
 
   -- 사용자가 « 를 눌러 펼쳐 둔 동안은 개입하지 않는다. 다시 접으면 다음 트리거가 처리한다.
   -- 버튼이 아예 없는 상태는 여기에 해당하지 않는다 — 접힌 것이 없을 뿐이고, 폭을 키우면 접힌다.
   if snap.expanded then
     log("메뉴바가 펼쳐진 상태다 — 폭을 그대로 둔다")
-    return currentWidth
+    return currentWidth, opts.lastFailSig
   end
 
+  -- 목표에 닿았으면 기억을 지운다. 배치가 달라졌다는 뜻이다.
   if fit.satisfied(snap) then
     return currentWidth
   end
@@ -120,7 +125,7 @@ function fit.decide(setWidth, probe, opts)
   snap = probe()
   if snap == nil or snap.sep == nil then
     log("구분자를 메뉴바에서 찾지 못했다")
-    return 0
+    return 0, opts.lastFailSig
   end
   -- 탐색이 실패하면 폭 0 으로 끝나므로, 다음 호출의 판독도 이 상태에서 시작한다.
   local zeroSig = fit.signature(snap, maxWidth)

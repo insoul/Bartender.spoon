@@ -279,7 +279,48 @@ do
 end
 
 --------------------------------------------------------------------------
--- 14. 서명은 항목 구성과 구분자 위치를 반영한다
+-- 14. 판단이 서지 않은 경로는 기억한 서명을 지우지 않는다
+--------------------------------------------------------------------------
+do
+  local SIG = "기억해 둔 실패 서명"
+
+  -- (a) 사용자가 펼쳐 둔 상태
+  local setWidth, probe, trace = fakeBar.new({
+    order = { "A", "SEP", "B" },
+    hiddenFor = function() return nil end,   -- 접힌 것 없음 → »
+    width = 145,
+  })
+  local w, sig = fit.decide(setWidth, probe, { currentWidth = 145, lastFailSig = SIG })
+  eq("펼침 상태: 기억한 서명을 그대로 돌려준다", sig, SIG)
+  eq("펼침 상태: 폭도 그대로", w, 145)
+  eq("펼침 상태: setWidth 를 부르지 않는다", #trace, 0)
+
+  -- (b) 구분자를 찾지 못한 상태
+  local setWidth2, probe2, trace2 = fakeBar.new({
+    order = { "H", "A", "SEP", "B" },
+    hiddenFor = function() return { "H" } end,
+    noSep = true,
+    width = 77,
+  })
+  local w2, sig2 = fit.decide(setWidth2, probe2, { currentWidth = 77, lastFailSig = SIG })
+  eq("구분자 유실: 기억한 서명을 그대로 돌려준다", sig2, SIG)
+  eq("구분자 유실: 폭도 그대로", w2, 77)
+  eq("구분자 유실: setWidth 를 부르지 않는다", #trace2, 0)
+
+  -- (c) 목표에 닿은 상태 — 기억을 지운다
+  local setWidth3, probe3, trace3 = fakeBar.new({
+    order = { "H", "SEP", "A" },
+    hiddenFor = function() return { "H" } end,
+    width = 145,
+  })
+  local w3, sig3 = fit.decide(setWidth3, probe3, { currentWidth = 145, lastFailSig = SIG })
+  check("이미 만족: 기억을 지운다", sig3 == nil, tostring(sig3))
+  eq("이미 만족: 폭은 그대로", w3, 145)
+  eq("이미 만족: setWidth 를 부르지 않는다", #trace3, 0)
+end
+
+--------------------------------------------------------------------------
+-- 15. 서명은 항목 구성과 구분자 위치를 반영한다
 --------------------------------------------------------------------------
 do
   local function snapshot(order)
@@ -302,7 +343,7 @@ do
 end
 
 --------------------------------------------------------------------------
--- 15. 상태 점검 함수 자체
+-- 16. 상태 점검 함수 자체
 --------------------------------------------------------------------------
 do
   local function snapshot(sepX, itemXs, chevronX)
