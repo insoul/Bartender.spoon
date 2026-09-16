@@ -9,7 +9,7 @@ local fit = {}
 ---     sep      = {key = <string>, x = <number>} 또는 nil,
 ---     chevronX = <number> 또는 nil,   -- « 의 x. 접힌 항목이 없으면 nil
 ---     expanded = <boolean>,           -- » 버튼이 있다. 사용자가 펼쳐 둔 상태다
----     items    = { {key = <string>, x = <number>}, ... },  -- 구분자를 뺀 나머지
+---     items    = { {key = <string>, x = <number>, w = <number>}, ... },  -- 구분자를 뺀 나머지. w 는 항목 폭
 ---   }
 --- 메뉴바 버튼은 세 상태를 가진다:
 ---   « 있음(chevronX)      — 접힌 항목이 있다
@@ -21,6 +21,14 @@ local fit = {}
 --- 주 화면 폭을 모를 때 쓰는 탐색 상한. 실제로는 opts.maxWidth 로 주 화면 폭을 넘겨받는다.
 fit.MAX_WIDTH = 600
 fit.TOLERANCE = 1
+--- 추정치는 "구분자 왼쪽에 보이는 항목 폭의 합"에서 이 값을 뺀 것이다. 메뉴바의 여유 공간만큼
+--- 덜 필요한데, 여유는 읽을 수 없고 배치마다 0~40pt 로 달라(실측 36, 3) 중간값을 잡는다.
+--- 어긋나면 탐색이 고친다. 같은 배치가 되풀이될 때는 opts.hint 로 지난 답을 받아 이 추정을 건너뛴다.
+fit.ESTIMATE_OFFSET = 20
+--- 추정에서 시작해 브래킷을 잡기까지의 첫 걸음. 실패할 때마다 두 배로 늘린다.
+fit.FIRST_STEP = 4
+--- 한 번의 탐색에서 폭을 바꿔 보는 최대 횟수
+fit.MAX_STEPS = 24
 
 local function isHidden(snap, x)
   return snap.chevronX ~= nil and x < snap.chevronX
@@ -71,11 +79,36 @@ function fit.signature(snap, maxWidth)
   return table.concat(keys, ",") .. "|" .. tostring(maxWidth)
 end
 
---- 구분자 바로 왼쪽 항목은 접히고 구분자 자신은 보이는, 가장 작은 폭을 찾는다.
+--- 항목 구성만 담은 서명. 순서·좌표를 보지 않으므로 접힌 상태와 무관하게 같은 값이 나온다.
+--- 호출자가 성공한 폭을 이 서명으로 기억해 두었다가 같은 구성에서 opts.hint 로 돌려준다.
+--- 구분자 이동은 잡지 못하지만, 틀린 hint 는 검증에서 걸려 한 걸음만 낭비된다.
+--- @param snap table|nil
+--- @return string|nil
+function fit.keyset(snap)
+  if snap == nil or snap.sep == nil then return nil end
+  local keys = {}
+  for i, item in ipairs(snap.items) do keys[i] = item.key end
+  table.sort(keys)
+  return table.concat(keys, ",")
+end
+
+--- 구분자 왼쪽에서 보이는 항목들의 폭 합. 탐색의 출발점을 추정하는 데 쓴다.
+local function visibleLeftWidth(snap)
+  local sum = 0
+  for _, item in ipairs(snap.items) do
+    if item.x < snap.sep.x and not isHidden(snap, item.x) then
+      sum = sum + (item.w or 0)
+    end
+  end
+  return sum
+end
+
+--- 구분자 왼쪽 항목은 모두 접히고 구분자 자신은 보이는 폭을 찾는다.
 --- 지금 상태가 이미 목표면 폭을 건드리지 않는다.
 --- @param setWidth function(w) 폭을 적용한다. 실제 구현은 메뉴바가 자리를 잡을 때까지 기다린다.
 --- @param probe function() -> snapshot
---- @param opts table|nil {maxWidth=, tolerance=, currentWidth=, lastFailSig=, log=function(fmt, ...)}
+--- @param opts table|nil {maxWidth=, tolerance=, currentWidth=, lastFailSig=, hint=, log=function(fmt, ...)}
+---                    hint 는 같은 항목 구성(fit.keyset)에서 지난번 성공한 폭. 있으면 먼저 시도한다
 --- @return number 적용한 폭
 --- @return string|nil 탐색이 실패한 배치의 서명. 다음 호출에 opts.lastFailSig 로 돌려주면
 ---                    같은 배치에서 같은 탐색을 되풀이하지 않는다. nil 이면 기억을 지운다.
@@ -114,65 +147,121 @@ function fit.decide(setWidth, probe, opts)
     return currentWidth, opts.lastFailSig
   end
 
-  setWidth(0)
-  snap = probe()
-  if snap == nil or snap.sep == nil then
-    log("구분자를 메뉴바에서 찾지 못했다")
-    return 0, opts.lastFailSig
+  -- 출발점. 구분자가 보이면 지금 폭에 "왼쪽에 보이는 항목 폭 합"을 더한 근처가 답이다 —
+  -- 폭 0 을 거치지 않으므로 메뉴바가 덜 흔들린다. 구분자가 접혀 있으면 어디까지 접혔는지
+  -- 읽을 수 없으니(접힌 항목 좌표는 옛 값) 폭 0 으로 내려가 다시 잰다.
+  local lo = nil          -- 아직 왼쪽에 보이는 항목이 있던 폭 중 가장 큰 값
+  local hi = nil          -- 구분자가 접혔거나 폭이 반영되지 않던 폭 중 가장 작은 값
+  local baseX, zeroSig
+  local start
+  if not isHidden(snap, snap.sep.x) then
+    baseX = snap.sep.x + currentWidth   -- 폭 0 일 때의 자리로 환산
+    lo = currentWidth
+    start = currentWidth + visibleLeftWidth(snap) - fit.ESTIMATE_OFFSET
+  else
+    setWidth(0)
+    snap = probe()
+    if snap == nil or snap.sep == nil then
+      log("구분자를 메뉴바에서 찾지 못했다")
+      return 0, opts.lastFailSig
+    end
+    if findNeighbor(snap) == nil then
+      log("구분자 왼쪽에 보이는 항목이 없다 — 접을 것이 없다")
+      return 0
+    end
+    baseX = snap.sep.x
+    lo = 0
+    start = visibleLeftWidth(snap) - fit.ESTIMATE_OFFSET
   end
-  -- 탐색이 실패하면 폭 0 으로 끝나므로, 다음 호출의 판독도 이 상태에서 시작한다.
-  local zeroSig = fit.signature(snap, maxWidth)
-
-  if findNeighbor(snap) == nil then
-    log("구분자 왼쪽에 보이는 항목이 없다 — 접을 것이 없다")
-    return 0
-  end
-  local baseX = snap.sep.x
+  -- 탐색이 실패하면 폭 0 으로 끝나므로, 다음 호출의 판독도 그 상태에서 시작한다.
+  -- 서명은 항목 순서만 담으므로 지금 판독으로 만들어도 같다.
+  zeroSig = fit.signature(snap, maxWidth)
 
   -- 폭이 커질수록 왼쪽 항목이 순서대로 접히므로 "구분자 왼쪽에 보이는 항목이 없다"는
-  -- 폭에 대해 단조다. 그 술어가 처음 참이 되는 폭 T 를 이분 탐색으로 짚는다.
-  -- 만족 구간은 T 부터 구분자 자신이 접히는 폭 직전까지인데, 메뉴바가 빡빡하면 이 구간이
-  -- 몇 pt 에 불과하다(« 는 항목 경계 단위로만 움직여서, 왼쪽이 다 접힌 다음 경계가 구분자
-  -- 오른쪽 끝이다). 그래서 구간을 더듬지 않고 T 를 정확히 찾은 뒤 그 자리에서 구분자가
-  -- 보이는지만 확인한다.
+  -- 폭에 대해 단조다. 만족 구간은 그 술어가 참이 되는 폭부터 구분자 자신이 접히는 폭
+  -- 직전까지인데, 메뉴바가 빡빡하면 몇 pt 에 불과하다(« 는 항목 경계 단위로만 움직여서,
+  -- 왼쪽이 다 접힌 다음 경계가 구분자 오른쪽 끝이다). 추정치에서 출발해 어긋난 방향으로
+  -- 걸음을 두 배씩 늘리며 브래킷을 잡고, 잡히면 그 안을 이분한다. 보통 한두 걸음에 끝난다.
   local function leftCleared(s)
     if s.sep == nil or isHidden(s, s.sep.x) then return true end
     return findNeighbor(s) == nil
   end
 
-  local lo, hi = 0, maxWidth
-  local applied = 0
-  while hi - lo > tolerance do
-    local mid = (lo + hi) // 2
-    setWidth(mid)
-    applied = mid
+  local function judge(width)
+    setWidth(width)
     snap = probe()
-
     -- 여유를 넘는 폭을 주면 시스템이 메뉴바를 다시 배치하지 않는다. 항목 폭만 커지고
     -- 구분자는 제자리에 남아, 판독값이 폭 0 일 때와 같아진다. 왼쪽으로 요청한 만큼
     -- 움직였는지로 이 상태를 가려내고 "너무 넓다"로 취급한다. 아주 작은 폭은 움직임이
     -- 판독 오차 안이라 검사하지 않는다.
-    local moved = mid < 8 or (snap.sep ~= nil and snap.sep.x <= baseX - mid / 2)
+    local moved = width < 8 or (snap.sep ~= nil and snap.sep.x <= baseX - width / 2)
+    if not moved or snap.sep == nil or isHidden(snap, snap.sep.x) then return "wide" end
+    if not leftCleared(snap) then return "narrow" end
+    return "ok"
+  end
 
-    if not moved or leftCleared(snap) then
-      hi = mid            -- 왼쪽이 다 접혔다(또는 폭이 반영되지 않는다). 더 작은 값을 본다
+  -- 만족한 폭 best 에서 출발해 더 작은 만족값을 찾는다. 아래로 걸음을 두 배씩 늘리다가
+  -- 처음 실패한 자리와 마지막 성공 사이만 이분한다. 답이 가까이 있을수록 싸다.
+  local function shrink(best, floor)
+    local d = fit.FIRST_STEP
+    local low = floor
+    while best - low > tolerance do
+      local cand = best - d
+      if cand <= low then cand = (low + best) // 2 end
+      local r = judge(cand)
+      if r == "ok" then
+        best = cand
+        d = d * 2
+      elseif r == "narrow" then
+        low = cand
+        d = tolerance   -- 브래킷이 잡혔다. 이제부터는 이분만 한다
+      else
+        break           -- 단조성이 깨졌다. 확인된 값으로 돌아간다
+      end
+    end
+    setWidth(best)
+    return best
+  end
+
+  local step = fit.FIRST_STEP
+  local loProbed = false   -- lo 가 실제 판독으로 확인된 값인가 (처음엔 하한일 뿐이다)
+  local w = math.max(lo + 1, math.min(math.floor(start), maxWidth))
+  -- 같은 구성에서 성공했던 폭이 있으면 그것부터 본다. 맞으면 한 걸음에 끝난다.
+  local hint = opts.hint
+  if hint ~= nil and hint > lo and hint <= maxWidth then w = hint end
+  for _ = 1, fit.MAX_STEPS do
+    local r = judge(w)
+    if r == "ok" then
+      if w == hint then return w end        -- 지난 답이 그대로 맞는다. 더 줄이지 않는다
+      return shrink(w, lo)
+    elseif r == "wide" then
+      hi = w
     else
-      lo = mid            -- 아직 왼쪽에 보이는 항목이 있다
+      lo = w
+      loProbed = true
+    end
+
+    if hi ~= nil and loProbed then
+      if hi - lo <= tolerance then break end
+      w = (lo + hi) // 2
+    elseif hi ~= nil then
+      w = hi - step                          -- 위로 벗어났다. 아래로 걸음을 늘리며 내려온다
+      step = step * 2
+      if w <= lo then
+        if hi - lo <= tolerance then break end
+        loProbed = true
+        w = (lo + hi) // 2
+      end
+    else
+      w = lo + step                          -- 아직 좁다. 위로 걸음을 늘리며 올라간다
+      step = step * 2
+      if w > maxWidth then break end
     end
   end
 
-  -- T 에서 구분자가 살아 있어야 한다. 마지막 왼쪽 항목과 함께 접혔으면 만족 구간이 없다.
-  -- 마지막 시도가 이미 T 였으면 같은 폭을 다시 적용해 정착을 기다리지 않는다.
-  if applied ~= hi then setWidth(hi) end
-  snap = probe()
-  local ok = snap.sep ~= nil and not isHidden(snap, snap.sep.x) and findNeighbor(snap) == nil
-  if not ok then
-    log("조건을 만족하는 폭이 없다 (0..%d) — 폭 0 으로 둔다", maxWidth)
-    setWidth(0)
-    return 0, zeroSig
-  end
-
-  return hi
+  log("조건을 만족하는 폭이 없다 (0..%d) — 폭 0 으로 둔다", maxWidth)
+  setWidth(0)
+  return 0, zeroSig
 end
 
 return fit

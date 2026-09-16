@@ -104,6 +104,7 @@ function obj:probe()
         local children = extras:attributeValue("AXChildren") or {}
         for index, child in ipairs(children) do
           local position = child:attributeValue("AXPosition")
+          local size = child:attributeValue("AXSize")
           if position then
             local description = child:attributeValue("AXDescription")
             if description == CHEVRON_HIDDEN then
@@ -111,7 +112,8 @@ function obj:probe()
             elseif description == CHEVRON_EXPANDED then
               snap.expanded = true
             else
-              local entry = { key = string.format("%d:%d", app:pid(), index), x = position.x }
+              local entry = { key = string.format("%d:%d", app:pid(), index), x = position.x,
+                              w = size and size.w or 0 }
               if child:attributeValue("AXHelp") == SEP_TOOLTIP then
                 snap.sep = entry
               else
@@ -237,12 +239,17 @@ function obj:fit()
 
   local co = coroutine.create(function()
     local ok, result, failSignature = pcall(function()
-      return fit.decide(apply, function() return self:probe() end, {
+      local keyset = fit.keyset(self:probe())
+      local width, failSig = fit.decide(apply, function() return self:probe() end, {
         maxWidth = searchLimit(),
         currentWidth = self.width,
         lastFailSig = self.failSignature,
+        hint = keyset and self.widthCache[keyset] or nil,
         log = function(fmt, ...) self:log(fmt, ...) end,
       })
+      -- 성공한 폭을 항목 구성별로 기억한다. 같은 구성이 돌아오면 탐색 없이 한 걸음에 맞춘다.
+      if keyset and width > 0 and failSig == nil then self.widthCache[keyset] = width end
+      return width, failSig
     end)
 
     -- 세대가 바뀌었으면 이 탐색은 이미 주인이 아니다. 상태를 건드리지 않고 사라진다.
@@ -289,6 +296,7 @@ function obj:init()
   self.running = false
   self.pending = false
   self.generation = 0
+  self.widthCache = {}
   self.lastLog = nil
   self.failSignature = nil
   self.suspended = false

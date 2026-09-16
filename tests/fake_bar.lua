@@ -16,6 +16,7 @@ local fakeBar = {}
 ---   noChevron  true 면 접힌 항목이 없을 때 버튼 자체가 없는 것으로 본다 (여유가 많은 화면)
 ---   deadZone   이 폭 이상은 시스템이 배치에 반영하지 않는다 (폭 0 과 같은 판독값)
 ---   vanish     key 집합. 접히면 판독 목록에서 아예 빠지는 항목 (시스템 항목이 그렇다)
+---   widths     key → 항목 폭. 없으면 30
 --- @return setWidth, probe, trace  trace 는 setWidth 로 적용된 폭의 기록
 function fakeBar.new(opts)
   local width = opts.width or 0
@@ -64,7 +65,8 @@ function fakeBar.new(opts)
         passedSep = true
         if not opts.noSep then snap.sep = { key = key, x = x } end
       elseif x ~= nil then
-        snap.items[#snap.items + 1] = { key = key, x = x }
+        local w = (opts.widths and opts.widths[key]) or 30
+        snap.items[#snap.items + 1] = { key = key, x = x, w = w }
       end
     end
     return snap

@@ -58,7 +58,7 @@ do
   check("정상 수렴: 결과가 [100,300) 안", w >= 100 and w < 300, "폭 " .. tostring(w))
   check("정상 수렴: 허용 오차 안에서 최소값", w < 100 + fit.TOLERANCE, "폭 " .. tostring(w))
   eq("정상 수렴: 마지막에 적용한 폭 = 결과", last(trace), w)
-  eq("정상 수렴: 탐색은 폭 0 에서 시작한다", trace[1], 0)
+  check("정상 수렴: 구분자가 보이므로 폭 0 을 거치지 않는다", not contains(trace, 0), table.concat(trace, ","))
 end
 
 --------------------------------------------------------------------------
@@ -74,7 +74,6 @@ do
   })
   local w = fit.decide(setWidth, probe)
   check("구분자 선접힘: 결과가 [60,200) 안", w >= 60 and w < 200, "폭 " .. tostring(w))
-  check("구분자 선접힘: 첫 시도 300 을 거쳤다", contains(trace, 300), table.concat(trace, ","))
   check("구분자 선접힘: 넓은 폭으로 끝나지 않았다", last(trace) < 200,
         "마지막 " .. tostring(last(trace)))
 end
@@ -439,6 +438,80 @@ do
   local w = fit.decide(setWidth, probe, { maxWidth = 1512 })
   check("사라지는 항목: 결과가 [120,200) 안", w >= 120 and w < 200, "폭 " .. tostring(w))
   eq("사라지는 항목: 마지막에 적용한 폭 = 결과", last(trace), w)
+end
+
+--------------------------------------------------------------------------
+-- 22. 추정이 맞으면 한 걸음에 끝난다
+--------------------------------------------------------------------------
+do
+  -- 왼쪽에 보이는 항목 폭 합 118, 여유 36 → 답 82 (실측 배치). 추정 78 → 82 로 두 걸음 안.
+  local setWidth, probe, trace = fakeBar.new({
+    order = { "H", "A", "B", "C", "D", "SEP", "E" },
+    widths = { A = 36, B = 26, C = 34, D = 22 },
+    hiddenFor = thresholds({
+      { from = 87, hidden = { "H", "A", "B", "C", "D", "SEP" } },
+      { from = 82, hidden = { "H", "A", "B", "C", "D" } },
+      { from = 60, hidden = { "H", "A", "B", "C" } },
+      { from = 30, hidden = { "H", "A" } },
+    }),
+  })
+  local w = fit.decide(setWidth, probe, { maxWidth = 1512 })
+  check("추정 출발: 결과가 [82,87) 안", w >= 82 and w < 87, "폭 " .. tostring(w))
+  check("추정 출발: 여덟 걸음 이내", #trace <= 8, "setWidth 호출 " .. #trace .. "회: " .. table.concat(trace, ","))
+  check("추정 출발: 폭 0 을 거치지 않는다", not contains(trace, 0), table.concat(trace, ","))
+end
+
+--------------------------------------------------------------------------
+-- 23. 구분자가 보이는 채로 왼쪽 항목이 생기면 지금 폭에서 더한다
+--------------------------------------------------------------------------
+do
+  local setWidth, probe, trace = fakeBar.new({
+    order = { "H", "A", "N", "SEP", "B" },
+    widths = { N = 50 },
+    hiddenFor = thresholds({
+      { from = 260, hidden = { "H", "A", "N", "SEP" } },
+      { from = 150, hidden = { "H", "A", "N" } },
+      { from = 100, hidden = { "H", "A" } },
+    }),
+    width = 145,
+  })
+  local w = fit.decide(setWidth, probe, { currentWidth = 145, maxWidth = 1512 })
+  check("증분 탐색: 결과가 [150,260) 안", w >= 150 and w < 260, "폭 " .. tostring(w))
+  check("증분 탐색: 폭 0 을 거치지 않는다", not contains(trace, 0), table.concat(trace, ","))
+  check("증분 탐색: 현재 폭보다 작은 값을 시도하지 않는다", (function() for _, v in ipairs(trace) do if v < 145 then return false end end return true end)(), table.concat(trace, ","))
+end
+
+--------------------------------------------------------------------------
+-- 24. 지난 답(hint)이 맞으면 한 걸음에 끝나고, 틀리면 탐색으로 넘어간다
+--------------------------------------------------------------------------
+do
+  local spec = {
+    order = { "H", "A", "B", "SEP", "C" },
+    hiddenFor = thresholds({
+      { from = 300, hidden = { "H", "A", "B", "SEP" } },
+      { from = 149, hidden = { "H", "A", "B" } },
+      { from = 60, hidden = { "H", "A" } },
+    }),
+  }
+  local setWidth, probe, trace = fakeBar.new(spec)
+  local w = fit.decide(setWidth, probe, { maxWidth = 1512, hint = 149 })
+  eq("hint 적중: 지난 답 그대로", w, 149)
+  eq("hint 적중: 한 걸음", #trace, 1)
+
+  local setWidth2, probe2, trace2 = fakeBar.new(spec)
+  local w2 = fit.decide(setWidth2, probe2, { maxWidth = 1512, hint = 400 })   -- 구분자까지 접히는 값
+  check("hint 오답(넓음): 그래도 수렴", w2 >= 149 and w2 < 300, "폭 " .. tostring(w2))
+  eq("hint 오답(넓음): 첫 시도는 hint", trace2[1], 400)
+
+  local setWidth3, probe3, trace3 = fakeBar.new(spec)
+  local w3 = fit.decide(setWidth3, probe3, { maxWidth = 1512, hint = 100 })   -- 아직 안 접히는 값
+  check("hint 오답(좁음): 그래도 수렴", w3 >= 149 and w3 < 300, "폭 " .. tostring(w3))
+
+  local snapA = { sep = { key = "SEP", x = 900 }, items = { { key = "b", x = 1 }, { key = "a", x = 2 } } }
+  local snapB = { sep = { key = "SEP", x = 500 }, items = { { key = "a", x = 9 }, { key = "b", x = 1 } } }
+  eq("keyset: 순서·좌표가 달라도 구성이 같으면 같다", fit.keyset(snapA), fit.keyset(snapB))
+  check("keyset: 항목이 늘면 다르다", fit.keyset(snapA) ~= fit.keyset({ sep = snapA.sep, items = { { key = "a", x = 1 }, { key = "b", x = 2 }, { key = "c", x = 3 } } }))
+  eq("keyset: 구분자가 없으면 nil", fit.keyset({ items = {} }), nil)
 end
 
 --------------------------------------------------------------------------
