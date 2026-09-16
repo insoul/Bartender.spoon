@@ -38,8 +38,9 @@ Hammerspoon Spoon. 접힌 항목을 보는 것은 시스템 `«` 버튼이 담�
 ### 판독기 (`probe`)
 - 모든 실행 중 앱의 `AXExtrasMenuBar` 자식을 모아 `{pid, title, x}` 목록으로 만든다 (`hs.axuielement`).
 - `«` 의 x 를 찾는다. 없으면 `nil` (전부 들어간 상태).
-- 구분자 자신은 Hammerspoon pid 의 자식 중 `bartender_sep` 로 식별한다. hs.menubar 항목의 AX title 이
-  비어 있으면 구분자 `frame()` 의 x 와 대조해 찾는다. 이 식별 방식은 구현 시 실측으로 정한다.
+- 구분자 자신은 `sep:setTooltip("bartender_sep")` 로 붙인 툴팁을 AX help 속성에서 찾아 식별한다.
+  툴팁은 항목 폭에 영향이 없다. AX help 에 툴팁이 실리지 않는 것으로 실측되면 Hammerspoon pid 의
+  자식 중 폭이 구분자 폭과 같은 항목으로 대체한다.
 - `isHidden(item)`: `«` 가 있고 `item.x < «.x`.
 
 ### 탐색기 (`fit`)
