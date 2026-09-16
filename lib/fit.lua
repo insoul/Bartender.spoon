@@ -141,18 +141,20 @@ function fit.decide(setWidth, probe, opts)
   end
 
   local lo, hi = 0, maxWidth
+  local applied = 0
   while hi - lo > tolerance do
     local mid = (lo + hi) // 2
     setWidth(mid)
+    applied = mid
     snap = probe()
 
     -- 여유를 넘는 폭을 주면 시스템이 메뉴바를 다시 배치하지 않는다. 항목 폭만 커지고
     -- 구분자는 제자리에 남아, 판독값이 폭 0 일 때와 같아진다. 왼쪽으로 요청한 만큼
     -- 움직였는지로 이 상태를 가려내고 "너무 넓다"로 취급한다. 아주 작은 폭은 움직임이
     -- 판독 오차 안이라 검사하지 않는다.
-    local applied = mid < 8 or (snap.sep ~= nil and snap.sep.x <= baseX - mid / 2)
+    local moved = mid < 8 or (snap.sep ~= nil and snap.sep.x <= baseX - mid / 2)
 
-    if not applied or leftCleared(snap) then
+    if not moved or leftCleared(snap) then
       hi = mid            -- 왼쪽이 다 접혔다(또는 폭이 반영되지 않는다). 더 작은 값을 본다
     else
       lo = mid            -- 아직 왼쪽에 보이는 항목이 있다
@@ -160,7 +162,8 @@ function fit.decide(setWidth, probe, opts)
   end
 
   -- T 에서 구분자가 살아 있어야 한다. 마지막 왼쪽 항목과 함께 접혔으면 만족 구간이 없다.
-  setWidth(hi)
+  -- 마지막 시도가 이미 T 였으면 같은 폭을 다시 적용해 정착을 기다리지 않는다.
+  if applied ~= hi then setWidth(hi) end
   snap = probe()
   local ok = snap.sep ~= nil and not isHidden(snap, snap.sep.x) and findNeighbor(snap) == nil
   if not ok then

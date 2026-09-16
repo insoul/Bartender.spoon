@@ -169,16 +169,24 @@ end
 -- 탐색
 --------------------------------------------------------------------------
 
---- 코루틴 안에서만 쓴다. 메뉴바가 자리를 잡을 때까지 기다린다 — 구분자와 « 의 위치, 항목 수가
---- 두 번 연속 같으면 안정으로 본다. 판독마다 세대를 확인해 끊긴 탐색이 계속 읽지 않게 한다.
-function obj:settle(generation)
+--- 판독 결과를 정착 비교용 문자열로 줄인다. 구분자·« 위치와 항목 수만 본다.
+local function layoutKey(s)
+  return string.format("%s|%s|%d", tostring(s.sep and s.sep.x), tostring(s.chevronX), #s.items)
+end
+
+--- 코루틴 안에서만 쓴다. 폭을 바꾼 뒤 메뉴바가 자리를 잡을 때까지 기다린다.
+--- 100ms 마다 판독해, 바꾸기 전 판독(before)과 달라진 뒤 두 번 연속 같으면 안정으로 본다.
+--- 재배치가 시작되기 전의 옛 좌표는 before 와 같으므로 안정으로 오인하지 않는다.
+--- 폭이 배치에 반영되지 않는 구간에서는 끝까지 before 와 같아 SETTLE_MAX 를 다 쓰고 나온다 —
+--- 그 판독을 fit 이 "반영 안 됨"으로 읽는 것이 맞다.
+--- 판독마다 세대를 확인해 끊긴 탐색이 계속 읽지 않게 한다.
+function obj:settle(generation, before)
   local last = nil
   for _ = 1, math.floor(SETTLE_MAX / SETTLE_STEP) do
     sleep(self, SETTLE_STEP)
     if self.generation ~= generation then error(ABORTED, 0) end
-    local s = self:probe()
-    local key = string.format("%s|%s|%d", tostring(s.sep and s.sep.x), tostring(s.chevronX), #s.items)
-    if key == last then return end
+    local key = layoutKey(self:probe())
+    if key == last and key ~= before then return end
     last = key
   end
 end
@@ -221,8 +229,9 @@ function obj:fit()
 
   local function apply(w)
     if self.generation ~= generation then error(ABORTED, 0) end
+    local before = layoutKey(self:probe())
     self:setWidth(w)
-    self:settle(generation)
+    self:settle(generation, before)
     if self.generation ~= generation then error(ABORTED, 0) end
   end
 
