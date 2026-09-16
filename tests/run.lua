@@ -8,6 +8,7 @@
 local here = debug.getinfo(1, "S").source:match("^@(.*[/\\])") or "./"
 local fit = dofile(here .. "../lib/fit.lua")
 local guard = dofile(here .. "../lib/guard.lua")
+local menuBuilder = dofile(here .. "../lib/menu.lua")
 local fakeBar = dofile(here .. "fake_bar.lua")
 
 local passed, failures = 0, {}
@@ -356,7 +357,35 @@ do
 end
 
 --------------------------------------------------------------------------
--- 17. 상태 점검 함수 자체
+-- 17. 구분자 메뉴 구성
+--------------------------------------------------------------------------
+do
+  local fired = false
+  local onFit = function() fired = true end
+
+  local normal = menuBuilder.build({ width = 144, hidden = 9 }, onFit)
+  eq("메뉴: 항목 세 개", #normal, 3)
+  eq("메뉴: 첫 항목은 다시 맞추기", normal[1].title, "다시 맞추기")
+  check("메뉴: 다시 맞추기에 동작이 달려 있다", type(normal[1].fn) == "function")
+  eq("메뉴: 가운데는 구분선", normal[2].title, "-")
+  eq("메뉴: 정상 상태 표시", normal[3].title, "폭 144 · 접힘 9개")
+  check("메뉴: 상태 표시는 누를 수 없다", normal[3].disabled == true)
+  normal[1].fn()
+  check("메뉴: 다시 맞추기가 넘겨받은 동작을 부른다", fired)
+
+  eq("메뉴: 펼침 상태 표시",
+     menuBuilder.build({ width = 144, hidden = 0, expanded = true }, onFit)[3].title, "펼침 상태")
+  eq("메뉴: 잠금·절전 표시",
+     menuBuilder.build({ width = 144, suspended = true }, onFit)[3].title, "잠금·절전 중")
+  eq("메뉴: 중단이 펼침보다 앞선다",
+     menuBuilder.statusTitle({ suspended = true, expanded = true }), "잠금·절전 중")
+  eq("메뉴: 폭이 소수여도 적는다", menuBuilder.statusTitle({ width = 144.0, hidden = 2 }),
+     "폭 144 · 접힘 2개")
+  eq("메뉴: 값이 없으면 0 으로 적는다", menuBuilder.statusTitle({}), "폭 0 · 접힘 0개")
+end
+
+--------------------------------------------------------------------------
+-- 18. 상태 점검 함수 자체
 --------------------------------------------------------------------------
 do
   local function snapshot(sepX, itemXs, chevronX)

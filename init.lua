@@ -18,6 +18,7 @@ obj.homepage = "https://github.com/insoul/Bartender.spoon"
 local spoonPath = debug.getinfo(1, "S").source:match("^@(.*[/\\])") or "./"
 local fit = dofile(spoonPath .. "lib/fit.lua")
 local guard = dofile(spoonPath .. "lib/guard.lua")
+local menu = dofile(spoonPath .. "lib/menu.lua")
 
 --- 구분자 식별: setTooltip 이 AX 의 AXHelp 로 실린다 (macOS 27.0 에서 실측 확인).
 --- 툴팁은 항목 폭에 영향을 주지 않으므로 탐색을 방해하지 않는다.
@@ -132,6 +133,33 @@ function obj:setWidth(w)
   if not self.sep then return end
   self.width = w
   self.sep:setIcon(blankImage(w), false)
+end
+
+--------------------------------------------------------------------------
+-- 메뉴
+--------------------------------------------------------------------------
+
+--- 구분자를 클릭했을 때 뜨는 메뉴. 여는 시점의 상태를 보여주려고 함수형으로 단다.
+function obj:menuItems()
+  local state = {
+    suspended = guard.isSuspended(self.suspended, focusedAppName()),
+    width = self.width,
+  }
+  if not state.suspended then
+    local snap = self:probe()
+    state.expanded = snap.expanded
+    state.hidden = 0
+    for _, item in ipairs(snap.items) do
+      if snap.chevronX ~= nil and item.x < snap.chevronX then
+        state.hidden = state.hidden + 1
+      end
+    end
+  end
+  return menu.build(state, function()
+    -- 구분자를 옮긴 직후 누르는 용도다. 기억한 실패 서명을 버리고 다시 잰다.
+    self.failSignature = nil
+    self:fit()
+  end)
 end
 
 --------------------------------------------------------------------------
@@ -254,6 +282,7 @@ function obj:start()
     return self
   end
   self.sep:setTooltip(SEP_TOOLTIP)
+  self.sep:setMenu(function() return self:menuItems() end)
   self:setWidth(0)
 
   self.screenWatcher = hs.screen.watcher.new(function() self:schedule() end)
