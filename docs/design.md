@@ -96,12 +96,25 @@ Hammerspoon Spoon. 접힌 항목을 보는 것은 시스템 `«` 버튼이 담�
 - `hs.timer.doEvery(60, ...)` — 앱이 자기 항목 폭을 바꾼 경우의 보정
 - 세 경로 모두 `schedule()` 을 부르고, `schedule()` 은 0.5초 디바운스 후 `fit()` 을 호출한다.
 
+### 잠금·절전
+잠금 화면과 절전 중에는 메뉴바에 `«` 가 생기지 않는다. 구분자를 상한까지 키워도 아무것도
+접히지 않아 탐색은 반드시 "만족하는 폭 없음"으로 끝나고, 그 실패가 서명으로 남으면 잠금을
+푼 뒤에도 같은 배치에서 탐색을 건너뛰어 접기가 풀린 채로 남는다.
+
+- `hs.caffeinate.watcher` 로 상태를 따라간다.
+  `screensDidLock` / `screensDidSleep` / `systemWillSleep` 에 중단으로 들어가고,
+  `screensDidUnlock` / `screensDidWake` / `systemDidWake` / `sessionDidBecomeActive` 에 나온다.
+- 중단 중 `fit()` 은 로그 한 줄만 남기고 폭을 그대로 둔다.
+- 돌아올 때 실패 서명을 버리고 다시 맞춘다.
+- 이벤트를 놓친 경우를 위해, `fit()` 은 앞에 있는 앱이 `loginwindow` 여도 중단으로 본다.
+
 ## 파일
 
 ```
 Bartender.spoon/
   init.lua            Spoon 본체 (sep, probe, 트리거, 코루틴 실행)
-  lib/fit.lua         폭 결정 로직 — hs.* 없는 순수 Lua (satisfied, decide)
+  lib/fit.lua         폭 결정 로직 — hs.* 없는 순수 Lua (satisfied, signature, decide)
+  lib/guard.lua       잠금·절전 판정 — hs.* 없는 순수 Lua
   tests/run.lua       단위 테스트
   tests/fake_bar.lua  판독 결과를 흉내내는 가짜 메뉴바
   docs/design.md      이 문서

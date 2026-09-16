@@ -17,6 +17,7 @@ obj.homepage = "https://github.com/insoul/Bartender.spoon"
 
 local spoonPath = debug.getinfo(1, "S").source:match("^@(.*[/\\])") or "./"
 local fit = dofile(spoonPath .. "lib/fit.lua")
+local guard = dofile(spoonPath .. "lib/guard.lua")
 
 --- 구분자 식별: setTooltip 이 AX 의 AXHelp 로 실린다 (macOS 27.0 에서 실측 확인).
 --- 툴팁은 항목 폭에 영향을 주지 않으므로 탐색을 방해하지 않는다.
@@ -61,6 +62,13 @@ local ABORTED = "bartender:aborted"
 local function searchLimit()
   local screen = hs.screen.mainScreen()
   return screen and screen:frame().w or fit.MAX_WIDTH
+end
+
+--- 지금 앞에 있는 앱 이름. 잠금 화면이면 loginwindow 다.
+local function focusedAppName()
+  local window = hs.window.focusedWindow()
+  local app = window and window:application()
+  return app and app:name() or nil
 end
 
 --------------------------------------------------------------------------
@@ -129,6 +137,10 @@ end
 --- 폭을 한 번 맞춘다. 지금 상태가 이미 목표면 아무것도 바꾸지 않는다.
 --- 실행 중이면 끝난 뒤 한 번만 더 돌도록 예약한다.
 function obj:fit()
+  if guard.isSuspended(self.suspended, focusedAppName()) then
+    self:log("잠금·절전 중 — 탐색하지 않는다")
+    return self
+  end
   if self.running then
     self.pending = true
     return self
@@ -200,6 +212,7 @@ function obj:init()
   self.generation = 0
   self.lastLog = nil
   self.failSignature = nil
+  self.suspended = false
   return self
 end
 
@@ -230,6 +243,22 @@ function obj:start()
   end)
   self.appWatcher:start()
 
+  -- 잠금·절전 중에는 메뉴바가 접히지 않아 탐색이 반드시 실패한다. 그 구간에는 손대지 않고,
+  -- 돌아올 때 잘못 남은 실패 기억을 버리고 다시 맞춘다.
+  local caffeinate = hs.caffeinate.watcher
+  self.powerWatcher = caffeinate.new(function(event)
+    if event == caffeinate.screensDidLock or event == caffeinate.screensDidSleep
+      or event == caffeinate.systemWillSleep then
+      self.suspended = true
+    elseif event == caffeinate.screensDidUnlock or event == caffeinate.screensDidWake
+      or event == caffeinate.systemDidWake or event == caffeinate.sessionDidBecomeActive then
+      self.suspended = false
+      self.failSignature = nil
+      self:schedule()
+    end
+  end)
+  self.powerWatcher:start()
+
   -- 앱이 제 항목 폭을 바꾸면 어떤 이벤트도 오지 않는다. 그 경우의 보정.
   self.correctiveTimer = hs.timer.doEvery(CORRECTIVE, function() self:schedule() end)
 
@@ -243,6 +272,7 @@ function obj:stop()
   if self.correctiveTimer then self.correctiveTimer:stop(); self.correctiveTimer = nil end
   if self.screenWatcher then self.screenWatcher:stop(); self.screenWatcher = nil end
   if self.appWatcher then self.appWatcher:stop(); self.appWatcher = nil end
+  if self.powerWatcher then self.powerWatcher:stop(); self.powerWatcher = nil end
   if self.sep then self.sep:delete(); self.sep = nil end
   self.running = false
   self.pending = false

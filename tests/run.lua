@@ -7,6 +7,7 @@
 
 local here = debug.getinfo(1, "S").source:match("^@(.*[/\\])") or "./"
 local fit = dofile(here .. "../lib/fit.lua")
+local guard = dofile(here .. "../lib/guard.lua")
 local fakeBar = dofile(here .. "fake_bar.lua")
 
 local passed, failures = 0, {}
@@ -343,7 +344,19 @@ do
 end
 
 --------------------------------------------------------------------------
--- 16. 상태 점검 함수 자체
+-- 16. 잠금·절전 중에는 탐색하지 않는다
+--------------------------------------------------------------------------
+do
+  check("중단 판정: 전원·세션 이벤트로 중단된 상태", guard.isSuspended(true, "Finder"))
+  check("중단 판정: 앞에 loginwindow 가 있으면 중단으로 본다",
+        guard.isSuspended(false, guard.LOGIN_WINDOW))
+  check("중단 판정: 평소에는 탐색한다", not guard.isSuspended(false, "Finder"))
+  check("중단 판정: 앞선 앱을 모를 때도 평소로 본다", not guard.isSuspended(false, nil))
+  check("중단 판정: 상태를 모를 때도 평소로 본다", not guard.isSuspended(nil, "Finder"))
+end
+
+--------------------------------------------------------------------------
+-- 17. 상태 점검 함수 자체
 --------------------------------------------------------------------------
 do
   local function snapshot(sepX, itemXs, chevronX)

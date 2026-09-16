@@ -39,6 +39,9 @@ Spoon 은 화면 변경·앱 실행/종료/전환·60초 주기 보정 때마다
 다시 접으면 다음 트리거가 평소대로 처리한다. 여유가 많아 버튼 자체가 없는 상태는 이것과 다르다 —
 접힌 것이 없을 뿐이므로, 구분자 왼쪽에 보이는 항목이 있으면 평소대로 탐색한다.
 
+잠금 화면과 절전 중에는 아무것도 하지 않는다. 그 상태에서는 메뉴바가 접히지 않아 탐색이
+반드시 실패하기 때문이다. 잠금을 풀거나 깨어나면 그때의 실패 기록을 버리고 다시 맞춘다.
+
 탐색이 "만족하는 폭 없음"으로 끝나면 그때의 배치를 기억해 둔다. 같은 배치가 계속되는 동안에는
 같은 탐색을 되풀이하지 않는다. 항목이 생기거나 사라지거나 구분자를 옮기면 다시 탐색한다.
 
@@ -62,7 +65,7 @@ spoon.Bartender.lastWidth    -- 마지막 탐색이 고른 폭
 ```sh
 osascript -e 'tell application "Hammerspoon" to execute lua code
   "return dofile(\"/Users/insoul/.hammerspoon/Spoons/Bartender.spoon/tests/run.lua\")"'
-# => 61 passed, 0 failed
+# => 75 passed, 0 failed
 ```
 
 실패하면 `error` 로 올라오므로 osascript 가 0 이 아닌 상태로 끝난다.
@@ -94,6 +97,7 @@ osascript -e 'tell application "Hammerspoon" to execute lua code
 ```
 init.lua        Spoon 본체 — 구분자, 판독기, 트리거
 lib/fit.lua     폭 결정 로직 (순수 Lua)
-tests/          fit 단위 테스트
+lib/guard.lua   잠금·절전 판정 (순수 Lua)
+tests/          단위 테스트
 docs/design.md  설계와 실측 근거
 ```
