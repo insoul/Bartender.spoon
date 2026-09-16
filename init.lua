@@ -147,10 +147,11 @@ function obj:fit()
   end
 
   local co = coroutine.create(function()
-    local ok, result = pcall(function()
+    local ok, result, failSignature = pcall(function()
       return fit.decide(apply, function() return self:probe() end, {
         maxWidth = searchLimit(),
         currentWidth = self.width,
+        lastFailSig = self.failSignature,
         log = function(fmt, ...) self:log(fmt, ...) end,
       })
     end)
@@ -161,6 +162,8 @@ function obj:fit()
     self.running = false
     if ok then
       self.lastWidth = result
+      -- 실패한 배치의 서명을 들고 있다가 다음 호출에 돌려준다. 성공하면 nil 이 되어 기억이 지워진다.
+      self.failSignature = failSignature
     elseif result ~= ABORTED then
       hs.printf("[Bartender] 탐색 실패: %s", tostring(result))
     end
@@ -196,6 +199,7 @@ function obj:init()
   self.pending = false
   self.generation = 0
   self.lastLog = nil
+  self.failSignature = nil
   return self
 end
 
@@ -203,6 +207,7 @@ function obj:start()
   if self.sep then return self end
   self.generation = self.generation + 1
   self.lastLog = nil
+  self.failSignature = nil
 
   -- autosaveName 을 주면 ⌘+드래그로 정한 자리가 재시작 후에도 유지된다.
   self.sep = hs.menubar.new(true, SEP_AUTOSAVE)
