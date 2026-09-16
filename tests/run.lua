@@ -160,20 +160,23 @@ do
 end
 
 --------------------------------------------------------------------------
--- 8. MenuBarAgent 버튼이 아예 없으면(여유가 많으면) 개입하지 않는다
+-- 8. 버튼이 아예 없어도(여유가 많은 화면) 왼쪽에 보이는 항목이 있으면 탐색한다
 --------------------------------------------------------------------------
 do
+  -- 접힌 것이 없을 뿐이다. 폭을 키우면 « 가 생기고 왼쪽부터 접힌다.
   local setWidth, probe, trace = fakeBar.new({
     order = { "A", "SEP", "B" },
-    hiddenFor = function() return { "A" } end,
     noChevron = true,
-    width = 88,
+    hiddenFor = function(w)
+      if w >= 300 then return { "A", "SEP" } end
+      if w >= 100 then return { "A" } end
+      return nil
+    end,
   })
-  local logged = false
-  local w = fit.decide(setWidth, probe, { currentWidth = 88, log = function() logged = true end })
-  eq("버튼 부재: 현재 폭을 그대로 돌려준다", w, 88)
-  eq("버튼 부재: setWidth 를 부르지 않는다", #trace, 0)
-  check("버튼 부재: 로그를 남겼다", logged)
+  local w = fit.decide(setWidth, probe)
+  check("버튼 부재: 탐색에 들어갔다", #trace > 0, "setWidth 호출 " .. #trace .. "회")
+  check("버튼 부재: 결과가 [100,300) 안", w >= 100 and w < 300, "폭 " .. tostring(w))
+  eq("버튼 부재: 마지막에 적용한 폭 = 결과", last(trace), w)
 end
 
 --------------------------------------------------------------------------
@@ -246,7 +249,60 @@ do
 end
 
 --------------------------------------------------------------------------
--- 13. 상태 점검 함수 자체
+-- 13. 같은 배치에서 실패하면 다시 탐색하지 않는다
+--------------------------------------------------------------------------
+do
+  -- 어떤 폭에서도 구분자가 이웃보다 먼저 접히는 배치
+  local order = { "H", "A", "SEP", "B" }
+  local setWidth, probe, trace = fakeBar.new({
+    order = order,
+    hiddenFor = thresholds({ { from = 1, hidden = { "H", "A", "SEP" } } }),
+  })
+
+  local w, sig = fit.decide(setWidth, probe)
+  eq("실패 서명: 첫 호출은 탐색하고 폭 0", w, 0)
+  check("실패 서명: 첫 호출이 탐색을 돌았다", #trace > 1, "setWidth 호출 " .. #trace .. "회")
+  check("실패 서명: 서명을 돌려준다", sig ~= nil and #sig > 0, tostring(sig))
+
+  local before = #trace
+  local w2, sig2 = fit.decide(setWidth, probe, { currentWidth = 0, lastFailSig = sig })
+  eq("실패 서명: 같은 배치면 setWidth 를 부르지 않는다", #trace, before)
+  eq("실패 서명: 현재 폭을 그대로 돌려준다", w2, 0)
+  eq("실패 서명: 서명을 계속 들고 있는다", sig2, sig)
+
+  -- 항목이 하나 늘면 배치가 달라진 것이므로 다시 탐색한다
+  table.insert(order, "C")
+  local before2 = #trace
+  fit.decide(setWidth, probe, { currentWidth = 0, lastFailSig = sig })
+  check("실패 서명: 배치가 바뀌면 다시 탐색한다", #trace > before2,
+        "setWidth 호출 " .. (#trace - before2) .. "회")
+end
+
+--------------------------------------------------------------------------
+-- 14. 서명은 항목 구성과 구분자 위치를 반영한다
+--------------------------------------------------------------------------
+do
+  local function snapshot(order)
+    local snap = { items = {}, chevronX = nil, expanded = false }
+    for i, key in ipairs(order) do
+      if key == "SEP" then snap.sep = { key = key, x = i * 10 }
+      else snap.items[#snap.items + 1] = { key = key, x = i * 10 } end
+    end
+    return snap
+  end
+  local base = fit.signature(snapshot({ "A", "B", "SEP", "C" }), 600)
+  eq("서명: 같은 배치면 같다", fit.signature(snapshot({ "A", "B", "SEP", "C" }), 600), base)
+  check("서명: 구분자가 움직이면 달라진다",
+        fit.signature(snapshot({ "A", "SEP", "B", "C" }), 600) ~= base)
+  check("서명: 항목이 늘면 달라진다",
+        fit.signature(snapshot({ "A", "B", "SEP", "C", "D" }), 600) ~= base)
+  check("서명: 상한이 달라지면 달라진다",
+        fit.signature(snapshot({ "A", "B", "SEP", "C" }), 1512) ~= base)
+  check("서명: 구분자가 없으면 nil", fit.signature({ items = {} }, 600) == nil)
+end
+
+--------------------------------------------------------------------------
+-- 15. 상태 점검 함수 자체
 --------------------------------------------------------------------------
 do
   local function snapshot(sepX, itemXs, chevronX)

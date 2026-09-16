@@ -1,6 +1,6 @@
 --- fit.decide 에 주입할 가짜 메뉴바.
 --- 실제 좌표 배치를 흉내낸다: 접힌 항목은 « 왼쪽에, 보이는 항목은 « 오른쪽에 순서대로 놓인다.
---- 접힌 항목이 없으면 같은 버튼이 » 가 되므로 expanded 로 표시한다.
+--- 접힌 항목이 없으면 같은 버튼이 » 가 되고(expanded), 여유가 아주 많으면 버튼 자체가 없다.
 --- 순수 Lua — hs.* 를 쓰지 않는다.
 
 local CHEVRON_X = 900
@@ -13,7 +13,7 @@ local fakeBar = {}
 ---   hiddenFor  function(width) -> key 목록 또는 nil
 ---   width      시작 폭 (기본 0)
 ---   noSep      true 면 판독 결과에서 구분자를 뺀다 (구분자 유실 상황)
----   noChevron  true 면 MenuBarAgent 버튼 자체가 없는 것으로 본다 (« 도 » 도 없음)
+---   noChevron  true 면 접힌 항목이 없을 때 버튼 자체가 없는 것으로 본다 (여유가 많은 화면)
 ---   deadZone   이 폭 이상은 시스템이 배치에 반영하지 않는다 (폭 0 과 같은 판독값)
 --- @return setWidth, probe, trace  trace 는 setWidth 로 적용된 폭의 기록
 function fakeBar.new(opts)
@@ -39,23 +39,20 @@ function fakeBar.new(opts)
 
     local snap = {
       items = {},
-      chevronX = (anyHidden and not opts.noChevron) and CHEVRON_X or nil,
+      chevronX = anyHidden and CHEVRON_X or nil,
+      -- 접힌 것이 없을 때: 여유가 빠듯하면 » 가 있고, 아주 많으면 버튼 자체가 없다
       expanded = (not anyHidden) and not opts.noChevron,
     }
     local foldRank, showRank = 0, 0
     local passedSep = false
     for _, key in ipairs(opts.order) do
       local x
-      if hidden[key] and not opts.noChevron then
+      if hidden[key] then
         foldRank = foldRank + 1
         x = CHEVRON_X - 100 + foldRank            -- « 왼쪽에 순서대로 몰린다
       else
         showRank = showRank + 1
         x = CHEVRON_X + 2000 + showRank * STEP    -- « 오른쪽에 순서대로
-      end
-      -- « 가 없으면 접힘 판정이 불가능하므로 원래 자리를 그대로 쓴다
-      if snap.chevronX == nil then
-        x = showRank * STEP
       end
       -- 구분자는 폭만큼 왼쪽으로 자라고, 그 왼쪽 항목들도 같이 밀린다.
       -- 반영되지 않은 폭에서는 아무도 움직이지 않는다.

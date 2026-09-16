@@ -8,10 +8,13 @@ local fit = {}
 ---   {
 ---     sep      = {key = <string>, x = <number>} 또는 nil,
 ---     chevronX = <number> 또는 nil,   -- « 의 x. 접힌 항목이 없으면 nil
----     expanded = <boolean>,           -- » 버튼이 있다. 접힌 항목이 없다는 뜻
----                                     -- 여유가 아주 많으면 버튼 자체가 사라져 둘 다 nil/false 다
+---     expanded = <boolean>,           -- » 버튼이 있다. 사용자가 펼쳐 둔 상태다
 ---     items    = { {key = <string>, x = <number>}, ... },  -- 구분자를 뺀 나머지
 ---   }
+--- 메뉴바 버튼은 세 상태를 가진다:
+---   « 있음(chevronX)      — 접힌 항목이 있다
+---   » 있음(expanded)      — 사용자가 펼쳐 두었다
+---   버튼 없음(둘 다 없음) — 여유가 많아 접힌 것이 없을 뿐이다. 폭을 키우면 « 가 생긴다
 --- 접힘 판정은 좌표 자체가 아니라 반드시 « 와의 비교로 한다.
 --- 접힌 항목의 x 는 옛 값이거나 « 쪽으로 몰린 값이라 절대 좌표로는 판정할 수 없다.
 
@@ -53,12 +56,36 @@ function fit.satisfied(snap)
   return findNeighbor(snap) == nil
 end
 
+--- 메뉴바 배치의 서명. 항목과 구분자를 x 순으로 늘어놓은 key 목록이다.
+--- 항목이 생기고 사라지는 것도, 구분자가 자리를 옮긴 것도 이 문자열이 달라지는 것으로 잡힌다.
+--- 상한이 달라지면 탐색 결과도 달라질 수 있으므로 함께 넣는다.
+--- @param snap table|nil
+--- @param maxWidth number
+--- @return string|nil
+function fit.signature(snap, maxWidth)
+  if snap == nil or snap.sep == nil then return nil end
+  local entries = { { key = snap.sep.key, x = snap.sep.x } }
+  for _, item in ipairs(snap.items) do
+    entries[#entries + 1] = item
+  end
+  -- x 가 같은 항목이 흔하다(접힌 항목은 « 쪽으로 몰린다). key 로 순서를 못박아 서명을 고정한다.
+  table.sort(entries, function(a, b)
+    if a.x ~= b.x then return a.x < b.x end
+    return a.key < b.key
+  end)
+  local keys = {}
+  for i, entry in ipairs(entries) do keys[i] = entry.key end
+  return table.concat(keys, ",") .. "|" .. tostring(maxWidth)
+end
+
 --- 구분자 바로 왼쪽 항목은 접히고 구분자 자신은 보이는, 가장 작은 폭을 찾는다.
 --- 지금 상태가 이미 목표면 폭을 건드리지 않는다.
 --- @param setWidth function(w) 폭을 적용한다. 실제 구현은 메뉴바가 자리를 잡을 때까지 기다린다.
 --- @param probe function() -> snapshot
---- @param opts table|nil {maxWidth=, tolerance=, currentWidth=, log=function(fmt, ...)}
+--- @param opts table|nil {maxWidth=, tolerance=, currentWidth=, lastFailSig=, log=function(fmt, ...)}
 --- @return number 적용한 폭
+--- @return string|nil 탐색이 실패한 배치의 서명. 다음 호출에 opts.lastFailSig 로 돌려주면
+---                    같은 배치에서 같은 탐색을 되풀이하지 않는다. nil 이면 기억을 지운다
 function fit.decide(setWidth, probe, opts)
   opts = opts or {}
   local maxWidth = opts.maxWidth or fit.MAX_WIDTH
@@ -72,16 +99,21 @@ function fit.decide(setWidth, probe, opts)
     return currentWidth
   end
 
-  -- 접힌 항목이 없으면 고를 것도 없다. 사용자가 « 를 눌러 펼쳐 둔 동안도 여기에 해당하고,
-  -- 이때 다시 접으면 사용자의 조작을 되돌리는 셈이 된다. 다시 접히면 다음 트리거가 처리한다.
-  if snap.chevronX == nil then
-    log(snap.expanded and "메뉴바가 펼쳐진 상태다 — 폭을 그대로 둔다"
-                      or "접힌 항목이 없다 — 폭을 그대로 둔다")
+  -- 사용자가 « 를 눌러 펼쳐 둔 동안은 개입하지 않는다. 다시 접으면 다음 트리거가 처리한다.
+  -- 버튼이 아예 없는 상태는 여기에 해당하지 않는다 — 접힌 것이 없을 뿐이고, 폭을 키우면 접힌다.
+  if snap.expanded then
+    log("메뉴바가 펼쳐진 상태다 — 폭을 그대로 둔다")
     return currentWidth
   end
 
   if fit.satisfied(snap) then
     return currentWidth
+  end
+
+  -- 같은 배치에서 이미 탐색이 실패했으면 또 돌지 않는다. 배치가 바뀌어야 결과가 달라진다.
+  if opts.lastFailSig ~= nil and fit.signature(snap, maxWidth) == opts.lastFailSig then
+    log("같은 배치에서 이미 실패 — 배치가 바뀔 때까지 건너뜀")
+    return currentWidth, opts.lastFailSig
   end
 
   setWidth(0)
@@ -90,6 +122,8 @@ function fit.decide(setWidth, probe, opts)
     log("구분자를 메뉴바에서 찾지 못했다")
     return 0
   end
+  -- 탐색이 실패하면 폭 0 으로 끝나므로, 다음 호출의 판독도 이 상태에서 시작한다.
+  local zeroSig = fit.signature(snap, maxWidth)
 
   local neighbor = findNeighbor(snap)
   if neighbor == nil then
@@ -128,7 +162,7 @@ function fit.decide(setWidth, probe, opts)
   if best == nil then
     log("조건을 만족하는 폭이 없다 (0..%d) — 폭 0 으로 둔다", maxWidth)
     setWidth(0)
-    return 0
+    return 0, zeroSig
   end
 
   setWidth(best)
