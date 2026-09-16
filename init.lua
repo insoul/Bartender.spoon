@@ -29,12 +29,17 @@ local SEP_AUTOSAVE = "bartender_sep"
 local CHEVRON_HIDDEN = "Show Hidden Menu Bar Items"
 local CHEVRON_EXPANDED = "Hide Menu Bar Items"
 
+--- hs.timer 는 참조를 잃으면 GC 로 사라진다. 이 파일의 모든 타이머는 self 에 보존하고
+--- stop() 에서 거둔다 — 보존하지 않으면 콜백이 오지 않아 탐색이 중간에 굳는다.
+
 --- 폭을 바꾼 뒤 메뉴바가 다시 배치될 때까지 기다리는 시간
 local SETTLE = 0.15
 --- 트리거가 몰릴 때 마지막 것만 살리는 디바운스
 local DEBOUNCE = 0.5
 --- 앱이 제 항목 폭을 바꾼 경우를 위한 보정 주기
 local CORRECTIVE = 60
+--- 이 시간 안에 탐색이 끝나지 않으면 상태가 굳은 것으로 보고 되돌린다
+local SEARCH_TIMEOUT = 15
 --- 아이콘 높이. 메뉴바 항목의 표준 높이다
 local ICON_HEIGHT = 22
 
@@ -49,9 +54,17 @@ end
 
 --- 코루틴 안에서만 쓴다. 메인 스레드를 막지 않고 기다린다 —
 --- 메뉴바 재배치는 런루프가 돌아야 일어나므로 usleep 으로 막으면 안 된다.
-local function sleep(seconds)
+--- 타이머를 self 에 붙들어 둔다. 참조를 잃은 hs.timer 는 GC 가 수거해 콜백이 영영 오지 않고,
+--- 그러면 코루틴이 깨어나지 못해 running 이 참인 채로 굳는다.
+local function sleep(self, seconds)
   local co = coroutine.running()
-  hs.timer.doAfter(seconds, function() coroutine.resume(co) end)
+  local timer
+  timer = hs.timer.doAfter(seconds, function()
+    -- 뒤이어 시작된 탐색이 자리를 차지했으면 그쪽 타이머를 지우지 않는다
+    if self.settleTimer == timer then self.settleTimer = nil end
+    coroutine.resume(co)
+  end)
+  self.settleTimer = timer
   coroutine.yield()
 end
 
@@ -151,10 +164,20 @@ function obj:fit()
   -- 이 탐색의 세대. stop()/start() 가 세대를 올리면 기다리던 코루틴이 스스로 끊는다.
   local generation = self.generation
 
+  -- 탐색이 어떤 이유로든 멈추면 running 이 참인 채로 굳어 이후 트리거가 전부 막힌다.
+  self.watchdog = hs.timer.doAfter(SEARCH_TIMEOUT, function()
+    self.watchdog = nil
+    self:log("탐색이 %d초 안에 끝나지 않았다 — 상태를 초기화한다", SEARCH_TIMEOUT)
+    self.generation = self.generation + 1   -- 낡은 코루틴을 끊는다
+    self.running = false
+    self.pending = false
+    self:schedule()
+  end)
+
   local function apply(w)
     if self.generation ~= generation then error(ABORTED, 0) end
     self:setWidth(w)
-    sleep(SETTLE)
+    sleep(self, SETTLE)
     if self.generation ~= generation then error(ABORTED, 0) end
   end
 
@@ -171,6 +194,7 @@ function obj:fit()
     -- 세대가 바뀌었으면 이 탐색은 이미 주인이 아니다. 상태를 건드리지 않고 사라진다.
     if self.generation ~= generation then return end
 
+    if self.watchdog then self.watchdog:stop(); self.watchdog = nil end
     self.running = false
     if ok then
       self.lastWidth = result
@@ -181,12 +205,13 @@ function obj:fit()
     end
     if self.pending then
       self.pending = false
-      hs.timer.doAfter(0, function() self:fit() end)
+      self:fit()   -- 코루틴 안에서 새 코루틴을 만드는 것은 안전하다
     end
   end)
 
   local ok, err = coroutine.resume(co)
   if not ok then
+    if self.watchdog then self.watchdog:stop(); self.watchdog = nil end
     self.running = false
     hs.printf("[Bartender] 탐색 시작 실패: %s", tostring(err))
   end
@@ -268,7 +293,10 @@ end
 
 function obj:stop()
   self.generation = self.generation + 1
+  -- 타이머는 참조를 잃으면 GC 로 사라지므로 전부 self 에 붙들어 두고 여기서 거둔다
   if self.debounce then self.debounce:stop(); self.debounce = nil end
+  if self.settleTimer then self.settleTimer:stop(); self.settleTimer = nil end
+  if self.watchdog then self.watchdog:stop(); self.watchdog = nil end
   if self.correctiveTimer then self.correctiveTimer:stop(); self.correctiveTimer = nil end
   if self.screenWatcher then self.screenWatcher:stop(); self.screenWatcher = nil end
   if self.appWatcher then self.appWatcher:stop(); self.appWatcher = nil end

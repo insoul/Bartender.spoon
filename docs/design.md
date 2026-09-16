@@ -90,6 +90,15 @@ Hammerspoon Spoon. 접힌 항목을 보는 것은 시스템 `«` 버튼이 담�
 `start()` / `stop()` 은 세대 카운터를 올린다. 대기 중이던 탐색은 깨어나서 세대가 바뀐 것을 보면
 즉시 끊어, 다시 `start()` 한 뒤 옛 탐색과 새 탐색이 겹치지 않게 한다.
 
+**Hammerspoon 타이머는 참조를 잃으면 GC 로 사라지므로 모든 타이머를 `self` 에 보존한다.**
+정착 대기(`settleTimer`), 디바운스(`debounce`), 보정(`correctiveTimer`), 감시견(`watchdog`)이
+모두 여기에 해당한다. 보존하지 않으면 콜백이 영영 오지 않아 코루틴이 깨어나지 못하고
+`running` 이 참인 채로 굳어 이후 트리거가 전부 막힌다.
+
+그래도 멈추는 경우를 대비해 **감시견**을 둔다. 탐색 시작과 함께 15초 타이머를 걸고, 정상
+종료하면 거둔다. 발화하면 세대를 올려 낡은 코루틴을 끊고 `running`·`pending` 을 되돌린 뒤
+다시 `schedule()` 한다.
+
 ### 트리거
 - `hs.screen.watcher` — 주 디스플레이·해상도 변경
 - `hs.application.watcher` — launched / terminated / activated
