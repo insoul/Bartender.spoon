@@ -9,6 +9,7 @@ local here = debug.getinfo(1, "S").source:match("^@(.*[/\\])") or "./"
 local fit = dofile(here .. "../lib/fit.lua")
 local guard = dofile(here .. "../lib/guard.lua")
 local menuBuilder = dofile(here .. "../lib/menu.lua")
+local autoshow = dofile(here .. "../lib/autoshow.lua")
 local fakeBar = dofile(here .. "fake_bar.lua")
 
 local passed, failures = 0, {}
@@ -512,6 +513,43 @@ do
   eq("keyset: 순서·좌표가 달라도 구성이 같으면 같다", fit.keyset(snapA), fit.keyset(snapB))
   check("keyset: 항목이 늘면 다르다", fit.keyset(snapA) ~= fit.keyset({ sep = snapA.sep, items = { { key = "a", x = 1 }, { key = "b", x = 2 }, { key = "c", x = 3 } } }))
   eq("keyset: 구분자가 없으면 nil", fit.keyset({ items = {} }), nil)
+end
+
+--------------------------------------------------------------------------
+-- 25. 상태별 시스템 항목 켜기·끄기 규칙
+--------------------------------------------------------------------------
+do
+  local both = { Battery = true, WiFi = true }
+  local w = autoshow.wanted({ onBattery = false, wifiConnected = true }, both)
+  eq("autoshow: 전원 연결이면 배터리 끔", w.Battery, false)
+  eq("autoshow: Wi-Fi 연결이면 Wi-Fi 끔", w.WiFi, false)
+  w = autoshow.wanted({ onBattery = true, wifiConnected = false }, both)
+  eq("autoshow: 배터리 구동이면 배터리 켬", w.Battery, true)
+  eq("autoshow: Wi-Fi 끊기면 Wi-Fi 켬", w.WiFi, true)
+  w = autoshow.wanted({ onBattery = true, wifiConnected = false }, { Battery = true, WiFi = false })
+  eq("autoshow: 규칙을 끈 항목은 건드리지 않는다", w.WiFi, nil)
+
+  local c = autoshow.changes({ Battery = false, WiFi = false }, { Battery = nil, WiFi = false })
+  eq("autoshow: 키 없음은 보임으로 보고 끈다", #c, 1)
+  eq("autoshow: 바꿀 항목 이름", c[1].name, "Battery")
+  eq("autoshow: 바꿀 값", c[1].visible, false)
+  c = autoshow.changes({ Battery = true }, { Battery = true })
+  eq("autoshow: 같은 값은 다시 쓰지 않는다", #c, 0)
+  c = autoshow.changes({}, { Battery = false })
+  eq("autoshow: 원하는 값이 없으면 건드리지 않는다", #c, 0)
+
+  check("autoshow: rssi 가 있으면 연결", autoshow.wifiConnected({ power = true, rssi = -48 }))
+  check("autoshow: rssi 0 이면 끊김", not autoshow.wifiConnected({ power = true, rssi = 0 }))
+  check("autoshow: 전원 꺼짐이면 끊김", not autoshow.wifiConnected({ power = false, rssi = -48 }))
+  check("autoshow: 정보 없음이면 끊김", not autoshow.wifiConnected(nil))
+  eq("autoshow: 플래그 8 은 숨김", autoshow.flagToVisible(8), false)
+  eq("autoshow: 플래그 2 는 표시", autoshow.flagToVisible(2), true)
+  eq("autoshow: 키 없음은 표시", autoshow.flagToVisible(nil), true)
+  eq("autoshow: 표시 → 2", autoshow.visibleToFlag(true), 2)
+  eq("autoshow: 숨김 → 8", autoshow.visibleToFlag(false), 8)
+  check("autoshow: Battery Power 면 배터리 구동", autoshow.onBattery("Battery Power"))
+  check("autoshow: AC Power 면 아님", not autoshow.onBattery("AC Power"))
+  check("autoshow: nil(배터리 없음)이면 아님", not autoshow.onBattery(nil))
 end
 
 --------------------------------------------------------------------------

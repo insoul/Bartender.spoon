@@ -139,11 +139,29 @@ Hammerspoon Spoon. 접힌 항목을 보는 것은 시스템 `«` 버튼이 담�
 - 돌아올 때 실패 서명을 버리고 다시 맞춘다.
 - 이벤트를 놓친 경우를 위해, `fit()` 은 앞에 있는 앱이 `loginwindow` 여도 중단으로 본다.
 
+## 상태별 시스템 항목 켜기·끄기 (`autoshow`)
+
+배터리·Wi-Fi 는 필요할 때만 보인다. 항목을 옮기는 것이 아니라 시스템 설정 → Menu Bar 의 스위치를
+상태에 따라 켜고 끈다. 꺼진 항목은 접힌 것이 아니라 없는 것이므로 빈칸도 `«` 뒤 목록도 차지하지 않는다.
+
+- 규칙: Battery 는 배터리로 돌 때만(`hs.battery.powerSource() == "Battery Power"`), WiFi 는 연결이
+  끊겼을 때만(`hs.wifi.interfaceDetails().rssi` 가 0 이거나 없음 — SSID 는 위치 권한이 없으면 nil 이라
+  쓰지 않는다) 보인다. `obj.autoShow = {Battery=, WiFi=}` 로 항목별로 끌 수 있다.
+- 저장소(2026-09-16 실측, macOS 27.0): per-host 도메인의 정수 플래그.
+  `defaults -currentHost write com.apple.controlcenter <Battery|WiFi> -int 2`(표시) / `-int 8`(숨김).
+  쓰면 재시작 없이 바로 반영되고 양방향 모두 동작한다. 키가 없으면 표시 상태다.
+  예전 macOS 의 `NSStatusItem Visible <이름>` 키와 `killall ControlCenter` 는 27 에서 효과가 없다.
+- 트리거: `hs.battery.watcher`, `hs.wifi.watcher`(SSIDChange·linkChange·powerChange), 60초 보정 타이머.
+  같은 값은 다시 쓰지 않고, 바뀐 것이 있으면 배치가 달라졌으니 `schedule()` 로 다시 맞춘다.
+- 이 스위치는 Spoon 이 소유한다. 사용자가 시스템 설정에서 손으로 바꿔도 다음 상태 변화 때 규칙대로 되돌아간다.
+- 켜질 때 보이는 자리에 나오게 하려면 배터리·Wi-Fi 항목을 구분자 **오른쪽**에 두어야 한다.
+
 ## 파일
 
 ```
 Bartender.spoon/
   init.lua            Spoon 본체 (sep, probe, 트리거, 코루틴 실행)
+  lib/autoshow.lua 상태별 시스템 항목 켜기·끄기 규칙(순수 함수)
   lib/fit.lua         폭 결정 로직 — hs.* 없는 순수 Lua (satisfied, signature, decide)
   lib/guard.lua       잠금·절전 판정 — hs.* 없는 순수 Lua
   tests/run.lua       단위 테스트
