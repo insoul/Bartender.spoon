@@ -33,8 +33,11 @@ local CHEVRON_EXPANDED = "Hide Menu Bar Items"
 --- hs.timer 는 참조를 잃으면 GC 로 사라진다. 이 파일의 모든 타이머는 self 에 보존하고
 --- stop() 에서 거둔다 — 보존하지 않으면 콜백이 오지 않아 탐색이 중간에 굳는다.
 
---- 폭을 바꾼 뒤 메뉴바가 다시 배치될 때까지 기다리는 시간
-local SETTLE = 0.15
+--- 폭을 바꾼 뒤 메뉴바가 자리를 잡을 때까지 기다리는 방식. 재배치는 애니메이션이라 걸리는 시간이
+--- 일정하지 않으므로 고정 대기 대신, SETTLE_STEP 마다 판독해 구분자·« 위치가 두 번 연속 같으면
+--- 끝낸다. SETTLE_MAX 를 넘기면 그대로 진행한다.
+local SETTLE_STEP = 0.1
+local SETTLE_MAX = 1.0
 --- 트리거가 몰릴 때 마지막 것만 살리는 디바운스
 local DEBOUNCE = 0.5
 --- 앱이 제 항목 폭을 바꾼 경우를 위한 보정 주기
@@ -166,6 +169,20 @@ end
 -- 탐색
 --------------------------------------------------------------------------
 
+--- 코루틴 안에서만 쓴다. 메뉴바가 자리를 잡을 때까지 기다린다 — 구분자와 « 의 위치, 항목 수가
+--- 두 번 연속 같으면 안정으로 본다. 판독마다 세대를 확인해 끊긴 탐색이 계속 읽지 않게 한다.
+function obj:settle(generation)
+  local last = nil
+  for _ = 1, math.floor(SETTLE_MAX / SETTLE_STEP) do
+    sleep(self, SETTLE_STEP)
+    if self.generation ~= generation then error(ABORTED, 0) end
+    local s = self:probe()
+    local key = string.format("%s|%s|%d", tostring(s.sep and s.sep.x), tostring(s.chevronX), #s.items)
+    if key == last then return end
+    last = key
+  end
+end
+
 --- 같은 말을 연달아 찍지 않는다. 앱 전환마다 트리거가 도는데 상태는 대개 그대로다.
 function obj:log(fmt, ...)
   local message = string.format(fmt, ...)
@@ -205,7 +222,7 @@ function obj:fit()
   local function apply(w)
     if self.generation ~= generation then error(ABORTED, 0) end
     self:setWidth(w)
-    sleep(self, SETTLE)
+    self:settle(generation)
     if self.generation ~= generation then error(ABORTED, 0) end
   end
 

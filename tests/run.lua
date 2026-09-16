@@ -385,6 +385,63 @@ do
 end
 
 --------------------------------------------------------------------------
+-- 19. 만족 구간이 몇 pt 뿐이어도 찾는다
+--------------------------------------------------------------------------
+do
+  -- 빡빡한 메뉴바: 120 에서 왼쪽이 다 접히고 125 에서 구분자까지 접힌다 (실측 배치)
+  local setWidth, probe, trace = fakeBar.new({
+    order = { "H", "A", "B", "SEP", "C" },
+    hiddenFor = thresholds({
+      { from = 125, hidden = { "H", "A", "B", "SEP" } },
+      { from = 120, hidden = { "H", "A", "B" } },
+      { from = 70, hidden = { "H", "A" } },
+    }),
+  })
+  local w, sig = fit.decide(setWidth, probe, { maxWidth = 1512 })
+  check("좁은 구간: 결과가 [120,125) 안", w >= 120 and w < 125, "폭 " .. tostring(w))
+  eq("좁은 구간: 마지막에 적용한 폭 = 결과", last(trace), w)
+  eq("좁은 구간: 실패 서명이 없다", sig, nil)
+end
+
+--------------------------------------------------------------------------
+-- 20. 마지막 왼쪽 항목과 구분자가 함께 접히면 만족 구간이 없다
+--------------------------------------------------------------------------
+do
+  local setWidth, probe, trace = fakeBar.new({
+    order = { "H", "A", "SEP", "B" },
+    hiddenFor = thresholds({
+      { from = 90, hidden = { "H", "A", "SEP" } },
+      { from = 40, hidden = { "H" } },
+    }),
+  })
+  local logged = false
+  local w, sig = fit.decide(setWidth, probe, { maxWidth = 1512, log = function() logged = true end })
+  eq("동시 접힘: 폭 0", w, 0)
+  eq("동시 접힘: 폭 0 으로 되돌렸다", last(trace), 0)
+  check("동시 접힘: 실패 서명을 돌려준다", sig ~= nil)
+  check("동시 접힘: 로그를 남겼다", logged)
+end
+
+--------------------------------------------------------------------------
+-- 21. 시스템 항목은 접히면 판독 목록에서 사라진다 — 이름 없이도 수렴한다
+--------------------------------------------------------------------------
+do
+  -- 배터리(MenuBarAgent)는 접히는 순간 AXChildren 에서 빠진다. 이웃 key 에 기대면 흔들린다.
+  local setWidth, probe, trace = fakeBar.new({
+    order = { "H", "A", "BAT", "SEP", "C" },
+    vanish = { BAT = true },
+    hiddenFor = thresholds({
+      { from = 200, hidden = { "H", "A", "BAT", "SEP" } },
+      { from = 120, hidden = { "H", "A", "BAT" } },
+      { from = 60, hidden = { "H", "A" } },
+    }),
+  })
+  local w = fit.decide(setWidth, probe, { maxWidth = 1512 })
+  check("사라지는 항목: 결과가 [120,200) 안", w >= 120 and w < 200, "폭 " .. tostring(w))
+  eq("사라지는 항목: 마지막에 적용한 폭 = 결과", last(trace), w)
+end
+
+--------------------------------------------------------------------------
 -- 18. 상태 점검 함수 자체
 --------------------------------------------------------------------------
 do

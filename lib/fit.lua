@@ -20,17 +20,10 @@ local fit = {}
 
 --- 주 화면 폭을 모를 때 쓰는 탐색 상한. 실제로는 opts.maxWidth 로 주 화면 폭을 넘겨받는다.
 fit.MAX_WIDTH = 600
-fit.TOLERANCE = 4
+fit.TOLERANCE = 1
 
 local function isHidden(snap, x)
   return snap.chevronX ~= nil and x < snap.chevronX
-end
-
-local function findByKey(snap, key)
-  for _, item in ipairs(snap.items) do
-    if item.key == key then return item end
-  end
-  return nil
 end
 
 --- 구분자 왼쪽에서 지금 보이는 항목 중 가장 오른쪽 것.
@@ -130,48 +123,53 @@ function fit.decide(setWidth, probe, opts)
   -- 탐색이 실패하면 폭 0 으로 끝나므로, 다음 호출의 판독도 이 상태에서 시작한다.
   local zeroSig = fit.signature(snap, maxWidth)
 
-  local neighbor = findNeighbor(snap)
-  if neighbor == nil then
+  if findNeighbor(snap) == nil then
     log("구분자 왼쪽에 보이는 항목이 없다 — 접을 것이 없다")
     return 0
   end
   local baseX = snap.sep.x
 
-  -- 폭이 커질수록 (1) 이웃이 접히고 (2) 더 커지면 구분자까지 접힌다.
-  -- 그 사이 구간의 왼쪽 끝을 이분 탐색으로 찾는다.
-  local lo, hi, best = 0, maxWidth, nil
+  -- 폭이 커질수록 왼쪽 항목이 순서대로 접히므로 "구분자 왼쪽에 보이는 항목이 없다"는
+  -- 폭에 대해 단조다. 그 술어가 처음 참이 되는 폭 T 를 이분 탐색으로 짚는다.
+  -- 만족 구간은 T 부터 구분자 자신이 접히는 폭 직전까지인데, 메뉴바가 빡빡하면 이 구간이
+  -- 몇 pt 에 불과하다(« 는 항목 경계 단위로만 움직여서, 왼쪽이 다 접힌 다음 경계가 구분자
+  -- 오른쪽 끝이다). 그래서 구간을 더듬지 않고 T 를 정확히 찾은 뒤 그 자리에서 구분자가
+  -- 보이는지만 확인한다.
+  local function leftCleared(s)
+    if s.sep == nil or isHidden(s, s.sep.x) then return true end
+    return findNeighbor(s) == nil
+  end
+
+  local lo, hi = 0, maxWidth
   while hi - lo > tolerance do
     local mid = (lo + hi) // 2
     setWidth(mid)
     snap = probe()
 
-    local sepHidden = snap.sep == nil or isHidden(snap, snap.sep.x)
-    local nb = findByKey(snap, neighbor.key)
-    local neighborHidden = nb == nil or isHidden(snap, nb.x)
-
     -- 여유를 넘는 폭을 주면 시스템이 메뉴바를 다시 배치하지 않는다. 항목 폭만 커지고
     -- 구분자는 제자리에 남아, 판독값이 폭 0 일 때와 같아진다. 왼쪽으로 요청한 만큼
-    -- 움직였는지로 이 상태를 가려낸다 — 그러지 않으면 "이웃이 보인다"로 읽어 폭을 더 키운다.
-    local applied = snap.sep ~= nil and snap.sep.x <= baseX - mid / 2
+    -- 움직였는지로 이 상태를 가려내고 "너무 넓다"로 취급한다. 아주 작은 폭은 움직임이
+    -- 판독 오차 안이라 검사하지 않는다.
+    local applied = mid < 8 or (snap.sep ~= nil and snap.sep.x <= baseX - mid / 2)
 
-    if sepHidden or not applied then
-      hi = mid            -- 너무 넓다. 구분자가 밀려났거나 폭이 반영되지 않는다
-    elseif not neighborHidden then
-      lo = mid            -- 너무 좁다. 이웃이 아직 보인다
+    if not applied or leftCleared(snap) then
+      hi = mid            -- 왼쪽이 다 접혔다(또는 폭이 반영되지 않는다). 더 작은 값을 본다
     else
-      best = mid          -- 조건 만족. 더 작은 값이 있는지 계속 본다
-      hi = mid
+      lo = mid            -- 아직 왼쪽에 보이는 항목이 있다
     end
   end
 
-  if best == nil then
+  -- T 에서 구분자가 살아 있어야 한다. 마지막 왼쪽 항목과 함께 접혔으면 만족 구간이 없다.
+  setWidth(hi)
+  snap = probe()
+  local ok = snap.sep ~= nil and not isHidden(snap, snap.sep.x) and findNeighbor(snap) == nil
+  if not ok then
     log("조건을 만족하는 폭이 없다 (0..%d) — 폭 0 으로 둔다", maxWidth)
     setWidth(0)
     return 0, zeroSig
   end
 
-  setWidth(best)
-  return best
+  return hi
 end
 
 return fit
