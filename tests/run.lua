@@ -30,14 +30,14 @@ local function contains(t, v)
   return false
 end
 
--- 임계 폭을 구간으로 표현하는 hiddenFor 만들기
+--- 임계 폭을 구간으로 표현하는 hiddenFor. 폭 내림차순으로 준다.
+--- "H" 는 항상 접혀 있는 항목이다 — 이게 있어야 « 가 존재하는 상태가 된다.
 local function thresholds(spec)
-  -- spec: {{from = <폭>, hidden = {키...}}, ...} 을 폭 내림차순으로 준다
   return function(w)
     for _, rule in ipairs(spec) do
       if w >= rule.from then return rule.hidden end
     end
-    return nil
+    return { "H" }
   end
 end
 
@@ -46,17 +46,17 @@ end
 --------------------------------------------------------------------------
 do
   local setWidth, probe, trace = fakeBar.new({
-    order = { "A", "SEP", "B", "C" },
+    order = { "H", "A", "SEP", "B" },
     hiddenFor = thresholds({
-      { from = 300, hidden = { "A", "SEP" } },
-      { from = 100, hidden = { "A" } },
+      { from = 300, hidden = { "H", "A", "SEP" } },
+      { from = 100, hidden = { "H", "A" } },
     }),
   })
   local w = fit.decide(setWidth, probe)
   check("정상 수렴: 결과가 [100,300) 안", w >= 100 and w < 300, "폭 " .. tostring(w))
   check("정상 수렴: 허용 오차 안에서 최소값", w < 100 + fit.TOLERANCE, "폭 " .. tostring(w))
   eq("정상 수렴: 마지막에 적용한 폭 = 결과", last(trace), w)
-  check("정상 수렴: 탐색이 끝났다", #trace > 3, "시도 " .. #trace .. "회")
+  eq("정상 수렴: 탐색은 폭 0 에서 시작한다", trace[1], 0)
 end
 
 --------------------------------------------------------------------------
@@ -64,53 +64,93 @@ end
 --------------------------------------------------------------------------
 do
   local setWidth, probe, trace = fakeBar.new({
-    order = { "A", "SEP", "B" },
+    order = { "H", "A", "SEP", "B" },
     hiddenFor = thresholds({
-      { from = 200, hidden = { "SEP" } },   -- 구분자 혼자 너무 넓어 자기만 접힌다
-      { from = 60, hidden = { "A" } },
+      { from = 200, hidden = { "H", "SEP" } },   -- 구분자 혼자 너무 넓어 자기만 접힌다
+      { from = 60, hidden = { "H", "A" } },
     }),
   })
   local w = fit.decide(setWidth, probe)
   check("구분자 선접힘: 결과가 [60,200) 안", w >= 60 and w < 200, "폭 " .. tostring(w))
   check("구분자 선접힘: 첫 시도 300 을 거쳤다", contains(trace, 300), table.concat(trace, ","))
-  check("구분자 선접힘: 300 이상을 적용한 채로 끝나지 않았다", last(trace) < 200,
+  check("구분자 선접힘: 넓은 폭으로 끝나지 않았다", last(trace) < 200,
         "마지막 " .. tostring(last(trace)))
 end
 
 --------------------------------------------------------------------------
--- 3. 구분자 왼쪽에 항목이 없으면 폭 0
+-- 3. 이미 목표 상태면 폭을 건드리지 않는다
 --------------------------------------------------------------------------
 do
   local setWidth, probe, trace = fakeBar.new({
-    order = { "SEP", "A", "B" },
-    hiddenFor = thresholds({ { from = 100, hidden = { "SEP" } } }),
+    order = { "H", "SEP", "A" },
+    hiddenFor = function() return { "H" } end,
+    width = 145,
   })
-  local w = fit.decide(setWidth, probe)
+  local w = fit.decide(setWidth, probe, { currentWidth = 145 })
+  eq("이미 만족: 현재 폭을 그대로 돌려준다", w, 145)
+  eq("이미 만족: setWidth 를 부르지 않는다", #trace, 0)
+end
+
+--------------------------------------------------------------------------
+-- 4. 왼쪽에 보이는 항목이 생기면 다시 탐색한다
+--------------------------------------------------------------------------
+do
+  local setWidth, probe, trace = fakeBar.new({
+    order = { "H", "A", "SEP", "B" },
+    hiddenFor = thresholds({
+      { from = 400, hidden = { "H", "A", "SEP" } },
+      { from = 200, hidden = { "H", "A" } },
+    }),
+    width = 145,
+  })
+  local w = fit.decide(setWidth, probe, { currentWidth = 145 })
+  check("만족 깨짐: 탐색에 들어갔다", #trace > 0, "setWidth 호출 " .. #trace .. "회")
+  check("만족 깨짐: 결과가 [200,400) 안", w >= 200 and w < 400, "폭 " .. tostring(w))
+  eq("만족 깨짐: 마지막에 적용한 폭 = 결과", last(trace), w)
+end
+
+--------------------------------------------------------------------------
+-- 5. 사용자가 펼쳐 둔 상태면 개입하지 않는다
+--------------------------------------------------------------------------
+do
+  local setWidth, probe, trace = fakeBar.new({
+    order = { "A", "SEP", "B" },
+    hiddenFor = function() return nil end,   -- 접힌 것 없음 → »
+    width = 145,
+  })
+  local logged = false
+  local w = fit.decide(setWidth, probe, { currentWidth = 145, log = function() logged = true end })
+  eq("펼침 상태: 현재 폭을 그대로 돌려준다", w, 145)
+  eq("펼침 상태: setWidth 를 부르지 않는다", #trace, 0)
+  check("펼침 상태: 로그를 남겼다", logged)
+end
+
+--------------------------------------------------------------------------
+-- 6. 탐색에 들어갔는데 구분자 왼쪽에 보이는 항목이 없으면 폭 0
+--------------------------------------------------------------------------
+do
+  -- 지금 폭에서는 구분자가 접혀 있어 만족이 아니지만, 폭 0 에서는 접을 것이 없다
+  local setWidth, probe, trace = fakeBar.new({
+    order = { "H", "SEP", "A" },
+    hiddenFor = thresholds({ { from = 100, hidden = { "H", "SEP" } } }),
+    width = 200,
+  })
+  local logged = false
+  local w = fit.decide(setWidth, probe, { currentWidth = 200, log = function() logged = true end })
   eq("이웃 없음: 폭 0", w, 0)
   eq("이웃 없음: 폭 0 만 적용했다", #trace, 1)
   eq("이웃 없음: 적용값 0", trace[1], 0)
+  check("이웃 없음: 로그를 남겼다", logged)
 end
 
 --------------------------------------------------------------------------
--- 4. 이미 접혀 있는 항목은 이웃 후보가 아니다
---------------------------------------------------------------------------
-do
-  -- 폭 0 에서 A 가 이미 접혀 있다. 보이는 왼쪽 항목이 없으므로 할 일이 없다.
-  local setWidth, probe = fakeBar.new({
-    order = { "A", "SEP", "B" },
-    hiddenFor = function() return { "A" } end,
-  })
-  eq("이미 접힌 항목 제외: 폭 0", fit.decide(setWidth, probe), 0)
-end
-
---------------------------------------------------------------------------
--- 5. 만족하는 폭이 없으면 폭 0 으로 되돌린다
+-- 7. 만족하는 폭이 없으면 폭 0 으로 되돌린다
 --------------------------------------------------------------------------
 do
   -- 어떤 폭에서도 구분자가 이웃보다 먼저 접힌다
   local setWidth, probe, trace = fakeBar.new({
-    order = { "A", "SEP", "B" },
-    hiddenFor = thresholds({ { from = 1, hidden = { "SEP" } } }),
+    order = { "H", "A", "SEP", "B" },
+    hiddenFor = thresholds({ { from = 1, hidden = { "H", "A", "SEP" } } }),
   })
   local logged = false
   local w = fit.decide(setWidth, probe, { log = function() logged = true end })
@@ -120,46 +160,50 @@ do
 end
 
 --------------------------------------------------------------------------
--- 6. « 가 없으면 아무것도 접히지 않은 상태로 본다
+-- 8. MenuBarAgent 버튼이 아예 없으면(여유가 많으면) 개입하지 않는다
 --------------------------------------------------------------------------
 do
-  -- 전 구간에서 « 가 없다 → 이웃이 끝까지 보이므로 만족값이 없다
   local setWidth, probe, trace = fakeBar.new({
     order = { "A", "SEP", "B" },
-    hiddenFor = function() return nil end,
+    hiddenFor = function() return { "A" } end,
+    noChevron = true,
+    width = 88,
   })
-  local w = fit.decide(setWidth, probe)
-  eq("« 없음: 폭 0", w, 0)
-  eq("« 없음: 폭 0 으로 되돌렸다", last(trace), 0)
-  check("« 없음: 상한까지 올려봤다", contains(trace, 300), table.concat(trace, ","))
+  local logged = false
+  local w = fit.decide(setWidth, probe, { currentWidth = 88, log = function() logged = true end })
+  eq("버튼 부재: 현재 폭을 그대로 돌려준다", w, 88)
+  eq("버튼 부재: setWidth 를 부르지 않는다", #trace, 0)
+  check("버튼 부재: 로그를 남겼다", logged)
 end
 
 --------------------------------------------------------------------------
--- 7. 판독에서 구분자가 사라지면 즉시 포기한다
+-- 9. 판독에서 구분자가 사라지면 즉시 포기한다
 --------------------------------------------------------------------------
 do
   local setWidth, probe, trace = fakeBar.new({
-    order = { "A", "SEP", "B" },
-    hiddenFor = function() return nil end,
+    order = { "H", "A", "SEP", "B" },
+    hiddenFor = function() return { "H" } end,
     noSep = true,
+    width = 77,
   })
   local logged = false
-  eq("구분자 유실: 폭 0", fit.decide(setWidth, probe, { log = function() logged = true end }), 0)
-  eq("구분자 유실: 폭 0 만 적용했다", #trace, 1)
+  local w = fit.decide(setWidth, probe, { currentWidth = 77, log = function() logged = true end })
+  eq("구분자 유실: 현재 폭을 그대로 돌려준다", w, 77)
+  eq("구분자 유실: setWidth 를 부르지 않는다", #trace, 0)
   check("구분자 유실: 로그를 남겼다", logged)
 end
 
 --------------------------------------------------------------------------
--- 8. 이웃은 구분자 왼쪽에서 가장 오른쪽 항목이다
+-- 10. 이웃은 구분자 왼쪽에서 가장 오른쪽 항목이다
 --------------------------------------------------------------------------
 do
-  -- B 가 구분자 바로 왼쪽. B 가 접히는 폭에서 멈춰야 하고, A 기준으로 가면 안 된다.
+  -- B 가 구분자 바로 왼쪽. A 만 접힌 구간은 조건을 만족하지 않는다.
   local setWidth, probe = fakeBar.new({
-    order = { "A", "B", "SEP", "C" },
+    order = { "H", "A", "B", "SEP", "C" },
     hiddenFor = thresholds({
-      { from = 400, hidden = { "A", "B", "SEP" } },
-      { from = 250, hidden = { "A", "B" } },
-      { from = 120, hidden = { "A" } },     -- A 만 접힌 구간은 조건을 만족하지 않는다
+      { from = 400, hidden = { "H", "A", "B", "SEP" } },
+      { from = 250, hidden = { "H", "A", "B" } },
+      { from = 120, hidden = { "H", "A" } },
     }),
   })
   local w = fit.decide(setWidth, probe)
@@ -167,18 +211,56 @@ do
 end
 
 --------------------------------------------------------------------------
--- 9. 탐색 상한·오차는 opts 로 바꿀 수 있다
+-- 11. 탐색 상한·오차는 opts 로 바꾼다 (상한은 주 화면 폭이 들어온다)
 --------------------------------------------------------------------------
 do
   local setWidth, probe, trace = fakeBar.new({
-    order = { "A", "SEP" },
-    hiddenFor = thresholds({ { from = 40, hidden = { "A" } } }),
+    order = { "H", "A", "SEP" },
+    hiddenFor = thresholds({ { from = 40, hidden = { "H", "A" } } }),
   })
   local w = fit.decide(setWidth, probe, { maxWidth = 200, tolerance = 1 })
   check("opts: 상한 안에서 수렴", w >= 40 and w <= 41, "폭 " .. tostring(w))
   for _, v in ipairs(trace) do
     check("opts: 상한을 넘지 않았다", v <= 200, "폭 " .. tostring(v))
   end
+end
+
+--------------------------------------------------------------------------
+-- 12. 반영되지 않는 폭 구간이 있어도 수렴한다
+--------------------------------------------------------------------------
+do
+  -- 상한(주 화면 폭)이 여유보다 훨씬 크면 탐색은 먼저 반영 안 되는 구간을 밟는다.
+  -- 그 구간의 판독값은 폭 0 과 같으므로, 걸러내지 않으면 "이웃이 보인다"로 읽고 폭만 키운다.
+  local setWidth, probe, trace = fakeBar.new({
+    order = { "H", "A", "SEP", "B" },
+    hiddenFor = thresholds({
+      { from = 300, hidden = { "H", "A", "SEP" } },
+      { from = 100, hidden = { "H", "A" } },
+    }),
+    deadZone = 400,
+  })
+  local w = fit.decide(setWidth, probe, { maxWidth = 1512 })
+  check("반영 안 되는 구간: 결과가 [100,300) 안", w >= 100 and w < 300, "폭 " .. tostring(w))
+  check("반영 안 되는 구간: 허용 오차 안에서 최소값", w < 100 + fit.TOLERANCE, "폭 " .. tostring(w))
+  eq("반영 안 되는 구간: 마지막에 적용한 폭 = 결과", last(trace), w)
+end
+
+--------------------------------------------------------------------------
+-- 13. 상태 점검 함수 자체
+--------------------------------------------------------------------------
+do
+  local function snapshot(sepX, itemXs, chevronX)
+    local snap = { sep = sepX and { key = "SEP", x = sepX } or nil, chevronX = chevronX, items = {} }
+    for i, x in ipairs(itemXs) do snap.items[i] = { key = "I" .. i, x = x } end
+    return snap
+  end
+  check("satisfied: 왼쪽이 전부 접혔으면 참", fit.satisfied(snapshot(920, { 810, 815 }, 900)))
+  check("satisfied: 왼쪽에 보이는 항목이 있으면 거짓",
+        not fit.satisfied(snapshot(960, { 810, 940 }, 900)))
+  check("satisfied: 구분자가 접혔으면 거짓", not fit.satisfied(snapshot(880, { 810 }, 900)))
+  check("satisfied: 구분자 오른쪽 항목은 상관없다", fit.satisfied(snapshot(920, { 810, 980 }, 900)))
+  check("satisfied: 스냅샷이 없으면 거짓", not fit.satisfied(nil))
+  check("satisfied: 구분자가 없으면 거짓", not fit.satisfied(snapshot(nil, { 810 }, 900)))
 end
 
 --------------------------------------------------------------------------

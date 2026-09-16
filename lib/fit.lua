@@ -8,11 +8,14 @@ local fit = {}
 ---   {
 ---     sep      = {key = <string>, x = <number>} 또는 nil,
 ---     chevronX = <number> 또는 nil,   -- « 의 x. 접힌 항목이 없으면 nil
+---     expanded = <boolean>,           -- » 버튼이 있다. 접힌 항목이 없다는 뜻
+---                                     -- 여유가 아주 많으면 버튼 자체가 사라져 둘 다 nil/false 다
 ---     items    = { {key = <string>, x = <number>}, ... },  -- 구분자를 뺀 나머지
 ---   }
 --- 접힘 판정은 좌표 자체가 아니라 반드시 « 와의 비교로 한다.
 --- 접힌 항목의 x 는 옛 값이거나 « 쪽으로 몰린 값이라 절대 좌표로는 판정할 수 없다.
 
+--- 주 화면 폭을 모를 때 쓰는 탐색 상한. 실제로는 opts.maxWidth 로 주 화면 폭을 넘겨받는다.
 fit.MAX_WIDTH = 600
 fit.TOLERANCE = 4
 
@@ -39,19 +42,50 @@ local function findNeighbor(snap)
   return best
 end
 
+--- 지금 폭이 이미 목표 상태인가: 구분자가 보이고, 구분자 왼쪽에 보이는 항목이 없다.
+--- 폭이 필요 이상으로 넓어도 만족으로 본다 — 구분자 오른쪽은 먼저 접히지 않으므로 무해하고,
+--- 굳이 다시 탐색하면 폭 0 을 거치면서 메뉴바가 깜빡인다.
+--- @param snap table|nil
+--- @return boolean
+function fit.satisfied(snap)
+  if snap == nil or snap.sep == nil then return false end
+  if isHidden(snap, snap.sep.x) then return false end
+  return findNeighbor(snap) == nil
+end
+
 --- 구분자 바로 왼쪽 항목은 접히고 구분자 자신은 보이는, 가장 작은 폭을 찾는다.
+--- 지금 상태가 이미 목표면 폭을 건드리지 않는다.
 --- @param setWidth function(w) 폭을 적용한다. 실제 구현은 메뉴바가 자리를 잡을 때까지 기다린다.
 --- @param probe function() -> snapshot
---- @param opts table|nil {maxWidth=, tolerance=, log=function(fmt, ...)}
---- @return number 적용한 폭 (조건을 만족하는 값이 없으면 0)
+--- @param opts table|nil {maxWidth=, tolerance=, currentWidth=, log=function(fmt, ...)}
+--- @return number 적용한 폭
 function fit.decide(setWidth, probe, opts)
   opts = opts or {}
   local maxWidth = opts.maxWidth or fit.MAX_WIDTH
   local tolerance = opts.tolerance or fit.TOLERANCE
+  local currentWidth = opts.currentWidth or 0
   local log = opts.log or function() end
 
-  setWidth(0)
   local snap = probe()
+  if snap == nil or snap.sep == nil then
+    log("구분자를 메뉴바에서 찾지 못했다")
+    return currentWidth
+  end
+
+  -- 접힌 항목이 없으면 고를 것도 없다. 사용자가 « 를 눌러 펼쳐 둔 동안도 여기에 해당하고,
+  -- 이때 다시 접으면 사용자의 조작을 되돌리는 셈이 된다. 다시 접히면 다음 트리거가 처리한다.
+  if snap.chevronX == nil then
+    log(snap.expanded and "메뉴바가 펼쳐진 상태다 — 폭을 그대로 둔다"
+                      or "접힌 항목이 없다 — 폭을 그대로 둔다")
+    return currentWidth
+  end
+
+  if fit.satisfied(snap) then
+    return currentWidth
+  end
+
+  setWidth(0)
+  snap = probe()
   if snap == nil or snap.sep == nil then
     log("구분자를 메뉴바에서 찾지 못했다")
     return 0
@@ -62,6 +96,7 @@ function fit.decide(setWidth, probe, opts)
     log("구분자 왼쪽에 보이는 항목이 없다 — 접을 것이 없다")
     return 0
   end
+  local baseX = snap.sep.x
 
   -- 폭이 커질수록 (1) 이웃이 접히고 (2) 더 커지면 구분자까지 접힌다.
   -- 그 사이 구간의 왼쪽 끝을 이분 탐색으로 찾는다.
@@ -75,8 +110,13 @@ function fit.decide(setWidth, probe, opts)
     local nb = findByKey(snap, neighbor.key)
     local neighborHidden = nb == nil or isHidden(snap, nb.x)
 
-    if sepHidden then
-      hi = mid            -- 너무 넓다. 구분자 자신이 밀려났다
+    -- 여유를 넘는 폭을 주면 시스템이 메뉴바를 다시 배치하지 않는다. 항목 폭만 커지고
+    -- 구분자는 제자리에 남아, 판독값이 폭 0 일 때와 같아진다. 왼쪽으로 요청한 만큼
+    -- 움직였는지로 이 상태를 가려낸다 — 그러지 않으면 "이웃이 보인다"로 읽어 폭을 더 키운다.
+    local applied = snap.sep ~= nil and snap.sep.x <= baseX - mid / 2
+
+    if sepHidden or not applied then
+      hi = mid            -- 너무 넓다. 구분자가 밀려났거나 폭이 반영되지 않는다
     elseif not neighborHidden then
       lo = mid            -- 너무 좁다. 이웃이 아직 보인다
     else
