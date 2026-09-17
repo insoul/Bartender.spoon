@@ -7,6 +7,10 @@
 --- 필요할 때만 보이면 되는 시스템 항목(배터리·Wi-Fi)은 접는 대신 시스템 설정 → Menu Bar 의 스위치를
 --- 상태에 따라 켜고 끈다. 꺼진 항목은 접힌 것이 아니라 없는 것이라 자리도 « 뒤 목록도 차지하지 않는다.
 ---
+--- iPhone 에서 복사한 Universal Clipboard(핸드오프) 항목이 클립보드에 있으면 구분자 오른쪽 끝에 폰 글리프를
+--- 띄우고, 구분자 메뉴에서 그 항목을 로컬 클립보드로 가져올 수 있게 한다. 핸드오프 항목은 클립보드 매니저가
+--- 건너뛰므로 이렇게 한 번 다시 써야 Paste 같은 앱에 남는다.
+---
 --- 설계와 실측 근거는 docs/design.md 에 있다.
 
 local obj = {}
@@ -21,6 +25,7 @@ obj.homepage = "https://github.com/insoul/Bartender.spoon"
 local spoonPath = debug.getinfo(1, "S").source:match("^@(.*[/\\])") or "./"
 local fit = dofile(spoonPath .. "lib/fit.lua")
 local guard = dofile(spoonPath .. "lib/guard.lua")
+local handoff = dofile(spoonPath .. "lib/handoff.lua")
 local menu = dofile(spoonPath .. "lib/menu.lua")
 local place = dofile(spoonPath .. "lib/place.lua")
 local rules = dofile(spoonPath .. "lib/rules.lua")
@@ -72,6 +77,10 @@ local APPEAR_DELAY = 1.0
 local DRAG_STEP_US = 15000
 --- 아이콘 높이. 메뉴바 항목의 표준 높이다
 local ICON_HEIGHT = 22
+--- 핸드오프 배지(폰 글리프)가 차지하는 폭. 구분자 이미지의 오른쪽 끝에 그린다
+local BADGE_WIDTH = 16
+--- 핸드오프 항목 감시 주기(초). 타입 목록만 조회하므로 한 번에 20µs 수준이다
+local HANDOFF_POLL = 0.5
 --- 메뉴바 줄로 인정하는 y 범위. 이 밖의 항목은 시스템이 화면 밖에 치워 둔 것이다
 local MENUBAR_ROW_HEIGHT = 40
 
@@ -83,9 +92,26 @@ local PINNED_IDS = {
 }
 
 --- 폭 w 의 거의 투명한 이미지. 알파 0 이면 항목이 그려지지 않으므로 0.001 을 쓴다.
-local function blankImage(w)
-  local canvas = hs.canvas.new({ x = 0, y = 0, w = math.max(w, 1), h = ICON_HEIGHT })
+--- badge 가 참이면 오른쪽 끝에 폰 글리프를 그린다. 이미지 폭은 그대로다 — w 가 글리프보다 좁을 때만 글리프
+--- 폭으로 넓어진다. 글리프는 검정으로 그리고 template 로 올려 시스템이 메뉴바 밝기에 맞게 색을 입힌다.
+local function sepImage(w, badge)
+  local width = math.max(w, badge and BADGE_WIDTH or 1)
+  local canvas = hs.canvas.new({ x = 0, y = 0, w = width, h = ICON_HEIGHT })
   canvas[1] = { type = "rectangle", action = "fill", fillColor = { alpha = 0.001 } }
+  if badge then
+    local x = width - BADGE_WIDTH
+    canvas[2] = {
+      type = "rectangle", action = "stroke",
+      frame = { x = x + 3.5, y = 4.5, w = 9, h = 13 },
+      roundedRectRadii = { xRadius = 2, yRadius = 2 },
+      strokeColor = { white = 0 }, strokeWidth = 1.2,
+    }
+    canvas[3] = {
+      type = "segments", action = "stroke",
+      coordinates = { { x = x + 6.5, y = 6.5 }, { x = x + 9.5, y = 6.5 } },
+      strokeColor = { white = 0 }, strokeWidth = 1,
+    }
+  end
   local img = canvas:imageFromCanvas()
   canvas:delete()
   return img
@@ -182,10 +208,11 @@ end
 
 --- 구분자 폭을 w 로 맞춘다. 실제 항목 폭은 시스템 여백 때문에 w + 18pt 가 된다.
 --- w = 0 이면 폭 1pt 이미지 — 항목은 남지만 사실상 보이지 않고 ⌘+드래그로 잡을 수는 있다.
+--- 핸드오프 배지가 켜져 있으면 같은 폭 안에 글리프를 함께 그린다.
 function obj:setWidth(w)
   if not self.sep then return end
   self.width = w
-  self.sep:setIcon(blankImage(w), false)
+  self.sep:setIcon(sepImage(w, self.handoff), self.handoff == true)
 end
 
 --------------------------------------------------------------------------
@@ -199,6 +226,7 @@ function obj:menuItems()
     width = self.width,
     battery = self.extras.Battery,
     batteryThreshold = self.extras.batteryThreshold,
+    handoff = self.handoff,
   }
   if not state.suspended then
     local snap = self:probe()
@@ -217,6 +245,7 @@ function obj:menuItems()
       self:fit()
     end,
     setBatteryThreshold = function(t) self:setBatteryThreshold(t) end,
+    fetchHandoff = function() self:fetchHandoff() end,
   })
 end
 
@@ -593,6 +622,42 @@ function obj:restoreExtras()
 end
 
 --------------------------------------------------------------------------
+-- 핸드오프 (iPhone Universal Clipboard)
+--------------------------------------------------------------------------
+
+--- 클립보드에 iPhone 항목이 있는지 보고, 바뀌었으면 배지를 다시 그린다.
+--- 타입 목록만 조회한다 — 데이터를 읽으면 그 순간 iPhone 에서 전송이 일어난다.
+--- 탐색·옮기기가 도는 동안은 미룬다. 그 사이 이미지를 다시 그리면 정착 판정을 흔들 수 있다.
+function obj:checkHandoff()
+  if self.running then return end
+  local remote = handoff.isRemote(hs.pasteboard.allContentTypes())
+  if remote == self.handoff then return end
+  self.handoff = remote
+  self:setWidth(self.width)
+  -- 구분자가 글리프보다 좁으면 배지가 항목 폭을 바꾼다. 그 배치는 다시 맞춰야 한다
+  if self.width < BADGE_WIDTH then self:schedule() end
+end
+
+--- iPhone 항목을 실제로 받아(이때 시스템 진행창이 뜰 수 있다) 마커 없는 로컬 항목으로 다시 쓴다.
+--- changeCount 가 바뀌므로 클립보드 매니저가 저장하고, 마커가 사라져 배지가 내려간다.
+function obj:fetchHandoff()
+  local data = handoff.strip(hs.pasteboard.readAllData())
+  if not data then
+    self:log("핸드오프 가져오기: 받은 데이터가 없다 (만료?)")
+    hs.alert.show("가져올 iPhone 클립보드가 없다")
+    return
+  end
+  local before = hs.pasteboard.changeCount()
+  local ok = hs.pasteboard.writeAllData(data)
+  local kinds = {}
+  for t, bytes in pairs(data) do kinds[#kinds + 1] = string.format("%s %dB", t, #bytes) end
+  table.sort(kinds)
+  self:log("핸드오프 가져옴 (ok=%s, changeCount %d→%d): %s", tostring(ok), before, hs.pasteboard.changeCount(),
+    table.concat(kinds, ", "))
+  self:checkHandoff()
+end
+
+--------------------------------------------------------------------------
 -- Spoon 수명주기
 --------------------------------------------------------------------------
 
@@ -610,6 +675,7 @@ function obj:init()
   self.placeQueue = {}
   self.placeSaved = 0
   self.placeTouched = false
+  self.handoff = false
   return self
 end
 
@@ -673,6 +739,9 @@ function obj:start()
     self:schedule()
   end)
 
+  self.handoffTimer = hs.timer.doEvery(HANDOFF_POLL, function() self:checkHandoff() end)
+  self:checkHandoff()
+
   -- 켜져 있는 시스템 항목도 확인한다. 구분자를 다시 만들었으니 접혀 있을 수 있다.
   self:applyExtras({ placeAll = true })
   self:schedule()
@@ -684,6 +753,8 @@ function obj:stop()
   self.placeQueue = {}
   -- 타이머는 참조를 잃으면 GC 로 사라지므로 전부 self 에 붙들어 두고 여기서 거둔다
   if self.correctiveTimer then self.correctiveTimer:stop(); self.correctiveTimer = nil end
+  if self.handoffTimer then self.handoffTimer:stop(); self.handoffTimer = nil end
+  self.handoff = false
   if self.batteryWatcher then self.batteryWatcher:stop(); self.batteryWatcher = nil end
   if self.wifiWatcher then self.wifiWatcher:stop(); self.wifiWatcher = nil end
   if self.screenWatcher then self.screenWatcher:stop(); self.screenWatcher = nil end

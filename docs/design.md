@@ -52,6 +52,7 @@ Hammerspoon Spoon. 접힌 항목을 보는 것은 시스템 `«` 버튼이 담�
 ### 구분자 (`sep`)
 - `hs.menubar.new(true, "bartender_sep")` 하나. 아이콘은 `hs.canvas` 로 만든 alpha 0.001 의 사각형.
 - `setWidth(w)`: 폭 w 의 투명 이미지를 만들어 `setIcon`. w=0 이면 폭 1 이미지(항목 유지, 사실상 보이지 않음).
+- 핸드오프 배지가 켜져 있으면 같은 이미지의 오른쪽 끝 16pt 에 폰 글리프를 함께 그린다 (아래 "iPhone 클립보드").
 
 ### 판독기 (`probe`)
 - 모든 실행 중 앱의 `AXExtrasMenuBar` 자식을 모아 `{key, x}` 목록으로 만든다 (`hs.axuielement`).
@@ -252,14 +253,51 @@ defaults -currentHost write com.apple.controlcenter Battery -int 8   # 숨김 (C
 - 60초 보정 타이머(접기와 공유) — 이벤트를 놓친 경우
 - 같은 값은 다시 쓰지 않는다.
 
+## iPhone 클립보드(핸드오프) 배지와 가져오기 (`checkHandoff` · `fetchHandoff`)
+
+iPhone 에서 복사하면 Universal Clipboard 가 Mac 클립보드에 항목을 올린다. 이 항목은 **타입 목록만 있고 데이터는
+약속(promise)** 이다 — 어떤 앱이 타입의 데이터를 읽는 순간 iPhone 에서 전송된다 (그때 시스템이
+"iPhone에서 붙여넣는 중" 진행창을 띄운다). 항목에는 `com.apple.is-remote-clipboard` 타입이 마커로 붙는다.
+
+Paste 같은 클립보드 매니저는 이 마커를 보고 항목을 **건너뛴다**. 읽으면 곧 전송이라, iPhone 에서 복사할 때마다
+Mac 이 내려받는 꼴이 되기 때문이다. 그래서 `⌘V` 로 붙여도 히스토리에 남지 않는다. 붙인 뒤 데이터가 채워져도
+같은 항목이라 changeCount 가 바뀌지 않아 다시 볼 기회도 없다 (2026-09-17 실측, Paste 4 / macOS 27.0).
+
+### 감지
+- 0.5초 타이머로 `hs.pasteboard.allContentTypes()` 를 보고 마커가 있으면 배지를 켠다 (`lib/handoff.lua` 의 `isRemote`).
+- 타입 목록 조회는 전송을 일으키지 않는다. 비용은 호출당 약 20µs (Hammerspoon 안에서 1000회 실측).
+- `hs.pasteboard.watcher` 는 쓰지 않는다 — 콜백에 문자열 내용을 넘기느라 내부에서 데이터를 읽어, 텍스트 핸드오프가
+  도착 즉시 전송된다. 타입만 보는 자체 타이머가 부작용이 없다.
+- changeCount 와 무관하게 매 틱 타입을 본다. 만료로 마커가 사라지는 경우도 같은 길로 잡기 위해서다.
+- **만료**: 도착 약 2분 뒤 시스템이 원격 항목을 치우고 **직전 로컬 항목을 되돌린다**. changeCount 도 그 항목의
+  값으로 돌아간다 (105 → 103, 2026-09-18 실측). 마커가 사라지므로 배지는 같은 타입 검사로 내려간다 — 별도
+  타임아웃이 없다. 가져오기로 이미 로컬 항목을 써 둔 경우에는 되돌릴 원격 항목이 없어 그대로 남는다.
+
+### 배지
+- 구분자 이미지 오른쪽 끝 16pt 에 폰 외곽선을 검정으로 그리고 `setIcon(img, true)` 로 template 처리한다.
+  시스템이 메뉴바 밝기에 맞게 색을 입힌다. 배지가 없을 때는 기존처럼 `setIcon(img, false)`.
+- 구분자 폭이 16 미만이면 이미지가 16 으로 넓어져 항목 폭이 바뀐다. 이때는 `schedule()` 로 다시 맞춘다.
+  그 이상이면 폭 변화가 없다.
+
+### 가져오기
+- 구분자 메뉴 맨 위 `📱 iPhone 클립보드 가져오기` (배지가 켜진 동안만). `hs.menubar` 는 클릭 = 메뉴와
+  클릭 = 동작을 동시에 못 하므로 메뉴 항목으로 둔다.
+- `hs.pasteboard.readAllData()` 로 전체 타입을 읽는다 — 이 순간 iPhone 에서 전송된다. 원격 블롭은 한 번에
+  통째로 오므로(`~/Library/Group Containers/group.com.apple.coreservices.useractivityd/shared-pasteboard/`)
+  타입을 여럿 읽어도 전송은 한 번이다.
+- 마커 타입과 빈 데이터를 뺀 뒤(`strip`) `hs.pasteboard.writeAllData()` 로 다시 쓴다. 새 항목이라 changeCount 가
+  바뀌고 클립보드 매니저가 저장한다. 이미지(png/jpeg/heic)·텍스트·URL 타입이 그대로 보존된다.
+- 빈 데이터는 iPhone 쪽이 만료돼 못 받은 타입이다. 남는 타입이 없으면 알림만 띄운다.
+
 ## 파일
 
 ```
 Bartender.spoon/
-  init.lua            Spoon 본체 (sep, probe, 트리거, 코루틴 실행, placeRight, applyExtras)
+  init.lua            Spoon 본체 (sep, probe, 트리거, 코루틴 실행, placeRight, applyExtras, checkHandoff/fetchHandoff)
   lib/fit.lua         폭 결정 로직 — hs.* 없는 순수 Lua (satisfied, signature, decide)
   lib/guard.lua       잠금·절전 판정 — hs.* 없는 순수 Lua
-  lib/menu.lua        구분자 메뉴 구성 — hs.* 없는 순수 Lua (build, batterySubmenu, statusTitle)
+  lib/handoff.lua     iPhone 클립보드 판별·정리 — hs.* 없는 순수 Lua (MARKER, isRemote, strip)
+  lib/menu.lua        구분자 메뉴 구성 — hs.* 없는 순수 Lua (build, batterySubmenu, statusTitle, HANDOFF_TITLE)
   lib/place.lua       옮기기 드래그 계획·판정 — hs.* 없는 순수 Lua (dragToRightOf, isRightOf)
   lib/rules.lua       시스템 항목 규칙 — hs.* 없는 순수 Lua (wanted, changes, toPlace, 플래그 변환, 상태 판독)
   tests/run.lua       단위 테스트

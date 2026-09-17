@@ -3,11 +3,12 @@
 ---   osascript -e 'tell application "Hammerspoon" to execute lua code
 ---     "return dofile(\"<spoon>/tests/run.lua\")"'
 --- 통과하면 요약 문자열을 돌려주고, 하나라도 실패하면 error 로 올린다.
---- 이 파일과 fake_bar, lib/fit, lib/place, lib/rules 는 hs.* 를 쓰지 않는다.
+--- 이 파일과 fake_bar, lib/fit, lib/place, lib/rules, lib/handoff 는 hs.* 를 쓰지 않는다.
 
 local here = debug.getinfo(1, "S").source:match("^@(.*[/\\])") or "./"
 local fit = dofile(here .. "../lib/fit.lua")
 local guard = dofile(here .. "../lib/guard.lua")
+local handoff = dofile(here .. "../lib/handoff.lua")
 local menuBuilder = dofile(here .. "../lib/menu.lua")
 local place = dofile(here .. "../lib/place.lua")
 local rules = dofile(here .. "../lib/rules.lua")
@@ -723,6 +724,60 @@ do
   eq("옮길 항목: all 이면 켜져 있는 것 전부, Battery 먼저", table.concat(rules.toPlace(want, {}, true), ","), "Battery,WiFi")
   eq("옮길 항목: all 이어도 꺼진 항목은 아니다", table.concat(rules.toPlace({ Battery = false, WiFi = true }, {}, true), ","), "WiFi")
   eq("옮길 항목: all 이어도 규칙을 끈 항목은 아니다", table.concat(rules.toPlace({ Battery = true }, {}, true), ","), "Battery")
+end
+
+--------------------------------------------------------------------------
+-- 34. 핸드오프: 클립보드 타입 목록으로 iPhone 항목을 알아본다
+--------------------------------------------------------------------------
+do
+  eq("마커 타입", handoff.MARKER, "com.apple.is-remote-clipboard")
+  check("마커가 있으면 핸드오프", handoff.isRemote({ { "public.png", "com.apple.is-remote-clipboard" } }))
+  check("마커가 없으면 아니다", not handoff.isRemote({ { "public.png", "public.utf8-plain-text" } }))
+  check("항목이 없으면 아니다", not handoff.isRemote({}))
+  check("nil 이면 아니다", not handoff.isRemote(nil))
+  check("둘째 항목에 있어도 핸드오프", handoff.isRemote({ { "public.png" }, { "com.apple.is-remote-clipboard" } }))
+end
+
+--------------------------------------------------------------------------
+-- 35. 핸드오프: 다시 쓸 데이터에서 마커만 뺀다
+--------------------------------------------------------------------------
+do
+  local src = { ["public.png"] = "PNG", ["public.utf8-plain-text"] = "글", ["com.apple.is-remote-clipboard"] = "" }
+  local got = handoff.strip(src)
+  eq("마커는 빠진다", got["com.apple.is-remote-clipboard"], nil)
+  eq("이미지는 남는다", got["public.png"], "PNG")
+  eq("텍스트는 남는다", got["public.utf8-plain-text"], "글")
+  eq("원본은 건드리지 않는다", src["com.apple.is-remote-clipboard"], "")
+  eq("마커만 있으면 가져올 것이 없다", handoff.strip({ ["com.apple.is-remote-clipboard"] = "" }), nil)
+  eq("빈 데이터는 버린다 (만료된 항목)", handoff.strip({ ["public.png"] = "", ["com.apple.is-remote-clipboard"] = "" }), nil)
+  eq("빈 데이터만 버리고 나머지는 남긴다", handoff.strip({ ["public.png"] = "", ["public.utf8-plain-text"] = "글" })["public.utf8-plain-text"], "글")
+  eq("빈 테이블이면 가져올 것이 없다", handoff.strip({}), nil)
+  eq("nil 이면 가져올 것이 없다", handoff.strip(nil), nil)
+end
+
+--------------------------------------------------------------------------
+-- 36. 구분자 메뉴: 핸드오프가 있을 때만 가져오기 항목이 맨 위에 붙는다
+--------------------------------------------------------------------------
+do
+  local fetched = false
+  local actions = {
+    fit = function() end,
+    setBatteryThreshold = function() end,
+    fetchHandoff = function() fetched = true end,
+  }
+  local base = { width = 144, hidden = 9, battery = true, batteryThreshold = 80 }
+
+  local with = menuBuilder.build({ width = 144, hidden = 9, battery = true, batteryThreshold = 80, handoff = true }, actions)
+  eq("핸드오프 메뉴: 항목 여섯 개", #with, 6)
+  eq("핸드오프 메뉴: 첫 항목", with[1].title, "📱 iPhone 클립보드 가져오기")
+  eq("핸드오프 메뉴: 둘째는 구분선", with[2].title, "-")
+  eq("핸드오프 메뉴: 그 아래는 평소 메뉴", with[3].title, "다시 맞추기")
+  with[1].fn()
+  check("핸드오프 메뉴: 가져오기가 넘겨받은 동작을 부른다", fetched)
+
+  local without = menuBuilder.build(base, actions)
+  eq("핸드오프 없음: 평소 메뉴 그대로", #without, 4)
+  eq("핸드오프 없음: 첫 항목은 다시 맞추기", without[1].title, "다시 맞추기")
 end
 
 --------------------------------------------------------------------------

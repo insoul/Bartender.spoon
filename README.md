@@ -28,6 +28,7 @@ hs.loadSpoon("Bartender"):start()
    구분자 **왼쪽 = 접힘**, **오른쪽 = 표시**.
 3. 접힌 항목을 보려면 시스템 `«` 를 누른다.
 4. 구분자(빈칸)를 그냥 클릭하면 메뉴가 뜬다 — `다시 맞추기`, `배터리 표시 ▸`, 상태 한 줄.
+   iPhone 클립보드가 있으면 맨 위에 `📱 iPhone 클립보드 가져오기` 가 붙는다.
 
 구분자 자리는 `autosaveName` 으로 저장되므로 Hammerspoon 을 다시 켜도 유지된다.
 
@@ -62,6 +63,8 @@ spoon.Bartender:setWidth(80) -- 구분자 폭을 직접 지정
 spoon.Bartender:probe()      -- 메뉴바 판독 결과 (sep / chevronX / items)
 spoon.Bartender.lastWidth    -- 마지막 탐색이 고른 폭
 spoon.Bartender:applyExtras() -- 배터리·Wi-Fi 스위치를 지금 상태에 맞춘다
+spoon.Bartender.handoff       -- 지금 클립보드에 iPhone 항목이 있는지
+spoon.Bartender:fetchHandoff() -- 메뉴 대신 코드로 가져오기
 ```
 
 `probe()` 의 `chevronX` 가 `nil` 이면 접힌 항목이 없는 상태다.
@@ -69,13 +72,13 @@ spoon.Bartender:applyExtras() -- 배터리·Wi-Fi 스위치를 지금 상태에 
 
 ## 테스트
 
-폭 결정 로직(`lib/fit.lua`)과 시스템 항목 규칙(`lib/rules.lua`), 메뉴 구성(`lib/menu.lua`)은 `hs.*` 를 쓰지 않는 순수 함수다. 판독 함수와 폭 설정 함수를
+폭 결정 로직(`lib/fit.lua`)과 시스템 항목 규칙(`lib/rules.lua`), 메뉴 구성(`lib/menu.lua`), iPhone 클립보드 판별(`lib/handoff.lua`)은 `hs.*` 를 쓰지 않는 순수 함수다. 판독 함수와 폭 설정 함수를
 주입해 가짜 좌표 표로 검증한다. 독립 lua 인터프리터가 없으므로 Hammerspoon 의 Lua 로 돌린다:
 
 ```sh
 osascript -e 'tell application "Hammerspoon" to execute lua code
   "return dofile(\"/Users/insoul/.hammerspoon/Spoons/Bartender.spoon/tests/run.lua\")"'
-# => 182 passed, 0 failed
+# => 204 passed, 0 failed
 ```
 
 실패하면 `error` 로 올라오므로 osascript 가 0 이 아닌 상태로 끝난다.
@@ -101,6 +104,17 @@ spoon.Bartender.extras = { Battery = true, WiFi = false, batteryThreshold = 80 }
 
 `spoon.Bartender:stop()` 은 감시만 멈추고 스위치는 그대로 둔다. 모두 다시 보이게 하려면
 `spoon.Bartender:restoreExtras()`.
+
+## iPhone 에서 복사한 것을 Paste 에 남기기
+
+iPhone 에서 복사하면(Universal Clipboard) 구분자 빈칸 오른쪽 끝에 폰 글리프가 뜬다. 그 자리를 클릭해
+`📱 iPhone 클립보드 가져오기` 를 누르면 iPhone 에서 실제로 받아 로컬 클립보드 항목으로 다시 쓴다.
+그러면 Paste 같은 클립보드 매니저에 남고, 글리프는 내려간다.
+
+왜 필요한가: iPhone 항목은 `com.apple.is-remote-clipboard` 마커가 붙은 "약속"이라 클립보드 매니저가
+건너뛴다. `⌘V` 로 붙여도 히스토리에는 남지 않는다. 자세한 것은 `docs/design.md`.
+
+감지는 0.5초마다 타입 목록만 본다 — 데이터를 읽지 않으므로 iPhone 전송을 일으키지 않는다.
 
 ## macOS 27 주의사항
 
@@ -140,9 +154,10 @@ spoon.Bartender.extras = { Battery = true, WiFi = false, batteryThreshold = 80 }
 ## 파일
 
 ```
-init.lua        Spoon 본체 — 구분자, 판독기, 트리거, 옮기기
+init.lua        Spoon 본체 — 구분자, 판독기, 트리거, 옮기기, 핸드오프 배지·가져오기
 lib/fit.lua     폭 결정 로직 (순수 Lua)
 lib/guard.lua   잠금·절전 판정 (순수 Lua)
+lib/handoff.lua iPhone 클립보드(핸드오프) 판별·정리 (순수 Lua)
 lib/place.lua   항목을 구분자 오른쪽으로 옮기는 드래그 계획 (순수 Lua)
 lib/rules.lua   배터리·Wi-Fi 스위치 규칙 (순수 Lua)
 lib/menu.lua    구분자 메뉴 구성 (순수 Lua)

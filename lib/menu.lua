@@ -33,13 +33,22 @@ function menu.batterySubmenu(threshold, onChoose)
   return items
 end
 
+--- 핸드오프 항목이 있을 때 맨 위에 붙는 가져오기 항목의 제목
+menu.HANDOFF_TITLE = "📱 iPhone 클립보드 가져오기"
+
 --- hs.menubar:setMenu 에 넘길 메뉴 테이블.
---- @param state table menu.statusTitle 이 받는 것에 더해 {battery=boolean, batteryThreshold=number|nil}.
----                    battery 가 참일 때만 "배터리 표시" 서브메뉴를 단다 — 규칙을 껐으면 바꿀 것이 없다
---- @param actions table {fit=function, setBatteryThreshold=function(number|nil)}
+--- @param state table menu.statusTitle 이 받는 것에 더해 {battery=boolean, batteryThreshold=number|nil, handoff=boolean}.
+---                    battery 가 참일 때만 "배터리 표시" 서브메뉴를 단다 — 규칙을 껐으면 바꿀 것이 없다.
+---                    handoff 가 참이면 iPhone 클립보드 가져오기를 맨 위에 단다
+--- @param actions table {fit=function, setBatteryThreshold=function(number|nil), fetchHandoff=function}
 --- @return table
 function menu.build(state, actions)
-  local items = { { title = "다시 맞추기", fn = actions.fit } }
+  local items = {}
+  if state.handoff then
+    items[#items + 1] = { title = menu.HANDOFF_TITLE, fn = actions.fetchHandoff }
+    items[#items + 1] = { title = "-" }
+  end
+  items[#items + 1] = { title = "다시 맞추기", fn = actions.fit }
   if state.battery then
     items[#items + 1] = {
       title = "배터리 표시",
