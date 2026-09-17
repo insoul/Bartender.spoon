@@ -6,7 +6,10 @@ macOS 27 의 메뉴바 오버플로(`«`)를 이용해 고른 메뉴바 항목�
 항목들이 밀려나 시스템 오버플로로 접힌다. 접힌 항목을 보는 것은 시스템 `«` 가 담당한다.
 이 Spoon 은 "무엇을 접을지"만 정한다.
 
-설정 파일도, 단축키도, UI 도 없다.
+배터리·Wi-Fi 처럼 필요할 때만 보이면 되는 시스템 항목은 접는 대신 시스템 설정 → Menu Bar 의
+스위치를 상태에 따라 켜고 끈다. 꺼진 동안은 자리도 `«` 뒤 목록도 차지하지 않는다.
+
+설정 파일도, 단축키도 없다. 구분자를 클릭하면 뜨는 메뉴가 전부다.
 
 ## 설치
 
@@ -24,6 +27,7 @@ hs.loadSpoon("Bartender"):start()
 2. **⌘ 을 누른 채 그 빈칸을 드래그**해서 원하는 자리에 놓는다.
    구분자 **왼쪽 = 접힘**, **오른쪽 = 표시**.
 3. 접힌 항목을 보려면 시스템 `«` 를 누른다.
+4. 구분자(빈칸)를 그냥 클릭하면 메뉴가 뜬다 — `다시 맞추기`, `배터리 표시 ▸`, 상태 한 줄.
 
 구분자 자리는 `autosaveName` 으로 저장되므로 Hammerspoon 을 다시 켜도 유지된다.
 
@@ -57,6 +61,7 @@ spoon.Bartender:fit()        -- 지금 바로 다시 탐색
 spoon.Bartender:setWidth(80) -- 구분자 폭을 직접 지정
 spoon.Bartender:probe()      -- 메뉴바 판독 결과 (sep / chevronX / items)
 spoon.Bartender.lastWidth    -- 마지막 탐색이 고른 폭
+spoon.Bartender:applyExtras() -- 배터리·Wi-Fi 스위치를 지금 상태에 맞춘다
 ```
 
 `probe()` 의 `chevronX` 가 `nil` 이면 접힌 항목이 없는 상태다.
@@ -64,35 +69,38 @@ spoon.Bartender.lastWidth    -- 마지막 탐색이 고른 폭
 
 ## 테스트
 
-폭 결정 로직(`lib/fit.lua`)은 `hs.*` 를 쓰지 않는 순수 함수다. 판독 함수와 폭 설정 함수를
+폭 결정 로직(`lib/fit.lua`)과 시스템 항목 규칙(`lib/rules.lua`), 메뉴 구성(`lib/menu.lua`)은 `hs.*` 를 쓰지 않는 순수 함수다. 판독 함수와 폭 설정 함수를
 주입해 가짜 좌표 표로 검증한다. 독립 lua 인터프리터가 없으므로 Hammerspoon 의 Lua 로 돌린다:
 
 ```sh
 osascript -e 'tell application "Hammerspoon" to execute lua code
   "return dofile(\"/Users/insoul/.hammerspoon/Spoons/Bartender.spoon/tests/run.lua\")"'
-# => 131 passed, 0 failed
+# => 182 passed, 0 failed
 ```
 
 실패하면 `error` 로 올라오므로 osascript 가 0 이 아닌 상태로 끝난다.
 
-## 다른 Spoon 이 쓰는 API
-
-```lua
-spoon.Bartender:separatorFrame()          -- 구분자의 화면 프레임 {x, y, w, h}. 없으면 nil
-spoon.Bartender:placeRight(axIdentifier)  -- 시스템 항목을 구분자 오른쪽으로 옮긴다
-spoon.Bartender:schedule()                -- 배치가 달라졌으니 다시 맞추라고 알린다
-spoon.Bartender:abort()                   -- 진행 중인 탐색과 예약을 끊는다
-```
-
-`placeRight` 는 켜진 시스템 항목(배터리·Wi-Fi)이 구분자 왼쪽 자리에 놓여 접혔을 때 쓴다. 접힌
-시스템 항목은 AX 목록에서 사라져 그 상태로는 끌 수 없으므로, 탐색을 끊고 폭을 0 으로 내려 항목을
-드러낸 뒤 ⌘+드래그를 합성해 구분자 오른쪽에 놓고 폭을 되돌려 다시 맞춘다(1~2초 깜빡임). 항목이
-이미 오른쪽에 있으면 폭을 건드리지 않는다. 연달아 부르면 순서대로 처리한다.
-
 ## 배터리·Wi-Fi 를 필요할 때만 보이기
 
-별도 Spoon 인 [Barback.spoon](../Barback.spoon) 이 맡는다. 함께 쓰면 Barback 이 스위치를 켤 때
-`placeRight` 로 항목을 구분자 오른쪽에 두고, 끌 때 `schedule` 로 다시 맞추라고 알려 준다.
+- 전원이 빠져 배터리로 돌 때, 또는 전원이 연결돼 있어도 잔량이 임계값(기본 80%) 이하일 때만 배터리 항목이 보인다.
+- Wi-Fi 가 끊겼을 때만 Wi-Fi 항목이 보인다.
+- 전원·Wi-Fi 상태가 바뀌면 바로, 그 외에는 60초마다 스위치를 규칙에 맞춘다. 이 스위치는 Spoon 이
+  소유한다 — 시스템 설정에서 손으로 바꿔도 다음 상태 변화 때 규칙대로 돌아간다.
+- 켠 항목이 구분자 왼쪽 자리에 놓여 접히면 폭을 0 으로 내려 항목을 드러낸 뒤 ⌘+드래그를 합성해
+  구분자 오른쪽에 놓고 폭을 되돌린다(1~2초 깜빡임). 항목이 이미 오른쪽에 있으면 폭을 건드리지 않는다.
+  `start()` 때는 켜져 있는 항목도 모두 확인한다 — 리로드로 구분자를 다시 만들면 접혀 있을 수 있다.
+
+임계값은 구분자 메뉴 → `배터리 표시 ▸` 에서 고른다 (`배터리로 돌 때만` / 50 / 60 / 70 / 80 / 90% 이하).
+고른 값은 `hs.settings` 에 남아 리로드 후에도 유지되고, 아래 기본값보다 우선한다.
+
+항목별로 끄거나 기본 임계값을 바꾸려면 `start()` 전에:
+
+```lua
+spoon.Bartender.extras = { Battery = true, WiFi = false, batteryThreshold = 80 }  -- batteryThreshold = nil 이면 배터리로 돌 때만
+```
+
+`spoon.Bartender:stop()` 은 감시만 멈추고 스위치는 그대로 둔다. 모두 다시 보이게 하려면
+`spoon.Bartender:restoreExtras()`.
 
 ## macOS 27 주의사항
 
@@ -113,12 +121,15 @@ spoon.Bartender:abort()                   -- 진행 중인 탐색과 예약을 �
   오른쪽 항목 폭이 몇 pt 만 늘어도 구분자가 접히고 왼쪽 항목이 되살아난다. 그러면 다음
   트리거가 다시 맞춘다. 여유를 두려면 항목을 더 접거나 시스템 설정 → Menu Bar 에서 끈다.
 - 배터리 같은 시스템 항목은 접히면 AX 목록에서 사라진다. 메뉴의 "접힘 N개"에는 세지 않는다.
+- 배터리·Wi-Fi 스위치는 `defaults -currentHost` 의 `com.apple.controlcenter` 도메인에 정수 플래그
+  (2 = 표시, 8 = 숨김)로 저장되며 쓰면 즉시 반영된다. MenuBarAgent 를 `killall` 하면 항목 객체가 사라져
+  로그아웃 전까지 되살릴 수 없다 — 재시작하지 않는다.
 - 카메라·마이크 인디케이터(`com.apple.menuextra.audiovideo`)는 시스템이 자리를 고정한다 — `«` 바로
   오른쪽에 놓이고 접히지 않으며 ⌘+드래그도 먹지 않는다. 판독에서 빼고(`PINNED_IDS`) 떠 있는 동안은
   폭을 건드리지 않는다. 화면 녹화 인디케이터는 확인하지 못했다.
 - 시스템 항목의 저장 위치(`NSStatusItem Preferred Position <이름>`)는 켤 때 읽히지 않는다. 자리를
   바꾸는 길은 ⌘+드래그뿐이다. 구분자를 다시 만들면(Hammerspoon 리로드) 구분자의 저장 자리와 겹치는
-  항목이 구분자 왼쪽으로 밀려 접힐 수 있다 — Barback 이 `start()` 때 켜져 있는 항목을 다시 확인한다.
+  항목이 구분자 왼쪽으로 밀려 접힐 수 있다 — `start()` 때 켜져 있는 항목을 다시 확인한다.
 - 탐색 상한은 주 화면 폭(`hs.screen.mainScreen():frame().w`)이다. 노트북을 닫고 넓은 외장
   화면만 쓰는 구성에서도 상한이 모자라지 않는다.
 - 여유를 넘는 폭에서는 시스템이 메뉴바를 다시 배치하지 않는다. 항목 폭만 커지고 좌표는 그대로라
@@ -133,6 +144,8 @@ init.lua        Spoon 본체 — 구분자, 판독기, 트리거, 옮기기
 lib/fit.lua     폭 결정 로직 (순수 Lua)
 lib/guard.lua   잠금·절전 판정 (순수 Lua)
 lib/place.lua   항목을 구분자 오른쪽으로 옮기는 드래그 계획 (순수 Lua)
+lib/rules.lua   배터리·Wi-Fi 스위치 규칙 (순수 Lua)
+lib/menu.lua    구분자 메뉴 구성 (순수 Lua)
 tests/          단위 테스트
 docs/design.md  설계와 실측 근거
 ```

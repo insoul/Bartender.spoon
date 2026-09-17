@@ -3,13 +3,14 @@
 ---   osascript -e 'tell application "Hammerspoon" to execute lua code
 ---     "return dofile(\"<spoon>/tests/run.lua\")"'
 --- 통과하면 요약 문자열을 돌려주고, 하나라도 실패하면 error 로 올린다.
---- 이 파일과 fake_bar, lib/fit, lib/place 는 hs.* 를 쓰지 않는다.
+--- 이 파일과 fake_bar, lib/fit, lib/place, lib/rules 는 hs.* 를 쓰지 않는다.
 
 local here = debug.getinfo(1, "S").source:match("^@(.*[/\\])") or "./"
 local fit = dofile(here .. "../lib/fit.lua")
 local guard = dofile(here .. "../lib/guard.lua")
 local menuBuilder = dofile(here .. "../lib/menu.lua")
 local place = dofile(here .. "../lib/place.lua")
+local rules = dofile(here .. "../lib/rules.lua")
 local fakeBar = dofile(here .. "fake_bar.lua")
 
 local passed, failures = 0, {}
@@ -361,23 +362,48 @@ end
 -- 17. 구분자 메뉴 구성
 --------------------------------------------------------------------------
 do
-  local fired = false
-  local onFit = function() fired = true end
+  local fired, chosen = false, "안 불림"
+  local actions = {
+    fit = function() fired = true end,
+    setBatteryThreshold = function(t) chosen = t end,
+  }
 
-  local normal = menuBuilder.build({ width = 144, hidden = 9 }, onFit)
-  eq("메뉴: 항목 세 개", #normal, 3)
+  local normal = menuBuilder.build({ width = 144, hidden = 9, battery = true, batteryThreshold = 80 }, actions)
+  eq("메뉴: 항목 네 개", #normal, 4)
   eq("메뉴: 첫 항목은 다시 맞추기", normal[1].title, "다시 맞추기")
   check("메뉴: 다시 맞추기에 동작이 달려 있다", type(normal[1].fn) == "function")
-  eq("메뉴: 가운데는 구분선", normal[2].title, "-")
-  eq("메뉴: 정상 상태 표시", normal[3].title, "폭 144 · 접힘 9개")
-  check("메뉴: 상태 표시는 누를 수 없다", normal[3].disabled == true)
+  eq("메뉴: 둘째는 배터리 표시 서브메뉴", normal[2].title, "배터리 표시")
+  eq("메뉴: 셋째는 구분선", normal[3].title, "-")
+  eq("메뉴: 정상 상태 표시", normal[4].title, "폭 144 · 접힘 9개")
+  check("메뉴: 상태 표시는 누를 수 없다", normal[4].disabled == true)
   normal[1].fn()
   check("메뉴: 다시 맞추기가 넘겨받은 동작을 부른다", fired)
 
+  local sub = normal[2].menu
+  eq("서브메뉴: 배터리로 돌 때만 + 임계값 다섯", #sub, 1 + #menuBuilder.THRESHOLDS)
+  eq("서브메뉴: 첫 항목", sub[1].title, "배터리로 돌 때만")
+  eq("서브메뉴: 임계값 항목 제목", sub[2].title, "50% 이하")
+  eq("서브메뉴: 마지막 임계값", sub[#sub].title, "90% 이하")
+  local checkedTitles = {}
+  for _, item in ipairs(sub) do if item.checked then checkedTitles[#checkedTitles + 1] = item.title end end
+  eq("서브메뉴: 현재 값 하나에만 체크", table.concat(checkedTitles, ","), "80% 이하")
+  sub[1].fn()
+  eq("서브메뉴: 배터리로 돌 때만 → nil 을 넘긴다", chosen, nil)
+  sub[3].fn()
+  eq("서브메뉴: 60% 이하 → 60 을 넘긴다", chosen, 60)
+
+  local none = menuBuilder.build({ width = 144, hidden = 0, battery = true, batteryThreshold = nil }, actions)
+  check("서브메뉴: 임계값 없음이면 첫 항목에 체크", none[2].menu[1].checked == true)
+  check("서브메뉴: 임계값 없음이면 나머지는 체크 없음", not none[2].menu[2].checked)
+
+  local off = menuBuilder.build({ width = 144, hidden = 0, battery = false }, actions)
+  eq("메뉴: 배터리 규칙을 껐으면 서브메뉴가 없다", #off, 3)
+  eq("메뉴: 배터리 규칙을 껐을 때 둘째는 구분선", off[2].title, "-")
+
   eq("메뉴: 펼침 상태 표시",
-     menuBuilder.build({ width = 144, hidden = 0, expanded = true }, onFit)[3].title, "펼침 상태")
+     menuBuilder.build({ width = 144, hidden = 0, expanded = true }, actions)[3].title, "펼침 상태")
   eq("메뉴: 잠금·절전 표시",
-     menuBuilder.build({ width = 144, suspended = true }, onFit)[3].title, "잠금·절전 중")
+     menuBuilder.build({ width = 144, suspended = true }, actions)[3].title, "잠금·절전 중")
   eq("메뉴: 중단이 펼침보다 앞선다",
      menuBuilder.statusTitle({ suspended = true, expanded = true }), "잠금·절전 중")
   eq("메뉴: 폭이 소수여도 적는다", menuBuilder.statusTitle({ width = 144.0, hidden = 2 }),
@@ -616,6 +642,87 @@ do
   local w3 = fit.decide(setWidth3, probe3)
   check("인디케이터 없음: 탐색해서 [100,300) 안을 고른다", w3 >= 100 and w3 < 300, "폭 " .. tostring(w3))
   check("인디케이터 없음: setWidth 를 불렀다", #trace3 > 0)
+end
+
+--------------------------------------------------------------------------
+-- 29. 시스템 항목 규칙: 원하는 표시 여부
+--------------------------------------------------------------------------
+do
+  local both = { Battery = true, WiFi = true }
+  local w = rules.wanted({ onBattery = false, wifiConnected = true }, both)
+  eq("전원 연결이면 배터리 끔", w.Battery, false)
+  eq("Wi-Fi 연결이면 Wi-Fi 끔", w.WiFi, false)
+  w = rules.wanted({ onBattery = true, wifiConnected = false }, both)
+  eq("배터리 구동이면 배터리 켬", w.Battery, true)
+  eq("Wi-Fi 끊기면 Wi-Fi 켬", w.WiFi, true)
+  w = rules.wanted({ onBattery = true, wifiConnected = false }, { Battery = true, WiFi = false })
+  eq("규칙을 끈 항목은 건드리지 않는다", w.WiFi, nil)
+
+  local th = { Battery = true, WiFi = true, batteryThreshold = 80 }
+  eq("전원 연결·81% 이면 끔", rules.wanted({ onBattery = false, batteryPercent = 81, wifiConnected = true }, th).Battery, false)
+  eq("전원 연결·80% 이면 켬", rules.wanted({ onBattery = false, batteryPercent = 80, wifiConnected = true }, th).Battery, true)
+  eq("전원 연결·50% 이면 켬", rules.wanted({ onBattery = false, batteryPercent = 50, wifiConnected = true }, th).Battery, true)
+  eq("배터리 구동이면 잔량과 무관하게 켬", rules.wanted({ onBattery = true, batteryPercent = 100, wifiConnected = true }, th).Battery, true)
+  eq("임계값 없으면 잔량 무시", rules.wanted({ onBattery = false, batteryPercent = 10, wifiConnected = true }, both).Battery, false)
+  eq("잔량 모르면 전원 연결로만 판단", rules.wanted({ onBattery = false, batteryPercent = nil, wifiConnected = true }, th).Battery, false)
+  eq("이유: 배터리 구동", rules.batteryReason({ onBattery = true, batteryPercent = 42.7 }), "배터리 구동 42%")
+  eq("이유: 전원 연결", rules.batteryReason({ onBattery = false, batteryPercent = 100 }), "전원 연결 100%")
+  eq("이유: 잔량 없음", rules.batteryReason({ onBattery = false }), "전원 연결")
+end
+
+--------------------------------------------------------------------------
+-- 30. 시스템 항목 규칙: 실제로 써야 할 변경만 고른다
+--------------------------------------------------------------------------
+do
+  local c = rules.changes({ Battery = false, WiFi = false }, { Battery = nil, WiFi = false })
+  eq("키 없음은 보임으로 보고 끈다", #c, 1)
+  eq("바꿀 항목 이름", c[1].name, "Battery")
+  eq("바꿀 값", c[1].visible, false)
+  c = rules.changes({ Battery = true }, { Battery = true })
+  eq("같은 값은 다시 쓰지 않는다", #c, 0)
+  c = rules.changes({}, { Battery = false })
+  eq("원하는 값이 없으면 건드리지 않는다", #c, 0)
+end
+
+--------------------------------------------------------------------------
+-- 31. 시스템 항목 규칙: 플래그 변환
+--------------------------------------------------------------------------
+do
+  eq("플래그 8 은 숨김", rules.flagToVisible(8), false)
+  eq("플래그 2 는 표시", rules.flagToVisible(2), true)
+  eq("키 없음은 표시", rules.flagToVisible(nil), true)
+  eq("표시 → 2", rules.visibleToFlag(true), 2)
+  eq("숨김 → 8", rules.visibleToFlag(false), 8)
+end
+
+--------------------------------------------------------------------------
+-- 32. 시스템 항목 규칙: 상태 판독
+--------------------------------------------------------------------------
+do
+  check("rssi 가 있으면 연결", rules.wifiConnected({ power = true, rssi = -48 }))
+  check("rssi 0 이면 끊김", not rules.wifiConnected({ power = true, rssi = 0 }))
+  check("전원 꺼짐이면 끊김", not rules.wifiConnected({ power = false, rssi = -48 }))
+  check("정보 없음이면 끊김", not rules.wifiConnected(nil))
+  check("Battery Power 면 배터리 구동", rules.onBattery("Battery Power"))
+  check("AC Power 면 아님", not rules.onBattery("AC Power"))
+  check("nil(배터리 없음)이면 아님", not rules.onBattery(nil))
+end
+
+--------------------------------------------------------------------------
+-- 33. 시스템 항목 규칙: 구분자 오른쪽으로 옮길 항목
+--------------------------------------------------------------------------
+do
+  eq("식별자: Battery", rules.MENU_EXTRA_ID.Battery, "com.apple.menuextra.battery")
+  eq("식별자: WiFi", rules.MENU_EXTRA_ID.WiFi, "com.apple.menuextra.wifi")
+
+  local want = { Battery = true, WiFi = true }
+  local on = { { name = "WiFi", visible = true } }
+  eq("옮길 항목: 막 켠 것만", table.concat(rules.toPlace(want, on), ","), "WiFi")
+  eq("옮길 항목: 끈 것은 아니다", #rules.toPlace(want, { { name = "Battery", visible = false } }), 0)
+  eq("옮길 항목: 바뀐 게 없으면 없다", #rules.toPlace(want, {}), 0)
+  eq("옮길 항목: all 이면 켜져 있는 것 전부, Battery 먼저", table.concat(rules.toPlace(want, {}, true), ","), "Battery,WiFi")
+  eq("옮길 항목: all 이어도 꺼진 항목은 아니다", table.concat(rules.toPlace({ Battery = false, WiFi = true }, {}, true), ","), "WiFi")
+  eq("옮길 항목: all 이어도 규칙을 끈 항목은 아니다", table.concat(rules.toPlace({ Battery = true }, {}, true), ","), "Battery")
 end
 
 --------------------------------------------------------------------------

@@ -156,8 +156,8 @@ Hammerspoon Spoon. 접힌 항목을 보는 것은 시스템 `«` 버튼이 담�
 
 ### 옮기기 (`placeRight`)
 
-다른 Spoon 이 켠 시스템 항목을 구분자 오른쪽으로 옮기는 작업. 폭을 만지는 일은 모두 이 Spoon 안에
-있어야 탐색과 경합하지 않는다 — 폭은 `fit` 코루틴이 소유하는 상태라, 밖에서 `setWidth` 를 부르면
+`applyExtras` 가 켠 시스템 항목을 구분자 오른쪽으로 옮기는 작업. 폭을 만지는 일은 모두 탐색과 같은
+소유자 아래 있어야 경합하지 않는다 — 폭은 `fit` 코루틴이 소유하는 상태라, 밖에서 `setWidth` 를 부르면
 탐색 도중 폭이 바뀌고 보정 타이머가 드래그 도중 다시 접는다.
 
 - 진입하면 `abort()` 로 진행 중인 탐색·디바운스·정착 대기를 끊고(세대 +1) `running` 을 잡아
@@ -180,25 +180,88 @@ Hammerspoon Spoon. 접힌 항목을 보는 것은 시스템 `«` 버튼이 담�
   구분자 바로 오른쪽에 놓인 항목의 슬롯은 구분자의 저장 자리를 덮으므로, 구분자를 다시 만들면
   (Hammerspoon 리로드) 구분자가 그 항목 오른쪽에 들어가 항목이 접힌다. 숨겼다 다시 켜는 것은
   구분자를 다시 만들지 않으므로 자리가 유지된다. 구분자 저장 자리는 앱 defaults 에 보이지 않아
-  고칠 수 없다 — Barback 이 `start()` 때 켜져 있는 항목을 `placeRight` 로 다시 확인한다.
+  고칠 수 없다 — `start()` 때 켜져 있는 항목을 `applyExtras({ placeAll = true })` 로 다시 확인한다.
 - 폭을 0 으로 내리면 접혔던 시스템 항목이 다시 AX 목록에 나타난다. 구분자는 오른쪽 항목들이
   정하는 자리에 17pt 로 남고, 그 오른쪽 가장자리 + 4pt 에 떨어뜨리면 항목이 구분자 바로 오른쪽
   슬롯에 들어간다(Wi-Fi: 978 → 1027, 구분자 1040 → 1002).
 
-## 배터리·Wi-Fi 를 필요할 때만 보이기
+## 배터리·Wi-Fi 를 필요할 때만 보이기 (`applyExtras`)
 
-이 Spoon 의 일이 아니다. 상태에 따라 시스템 항목 스위치를 켜고 끄는 것은 별도 Spoon 인
-Barback.spoon 이 맡는다. Barback 은 항목을 켜면 `spoon.Bartender:placeRight(식별자)` 로 구분자
-오른쪽에 두고, 끄면 `spoon.Bartender:schedule()` 을 불러 배치를 다시 맞추게 한다.
+필요할 때만 보이면 되는 시스템 항목은 접는 대신 시스템 설정 → Menu Bar 의 스위치를 상태에 따라
+켜고 끈다. 꺼진 항목은 접힌 것이 아니라 없는 것이므로 빈칸도 `«` 뒤 목록도 차지하지 않는다.
+
+### 규칙
+
+- **Battery** — 전원이 빠져 배터리로 돌 때(`hs.battery.powerSource() == "Battery Power"`), 또는 전원이 연결돼
+  있어도 잔량(`hs.battery.percentage()`)이 `batteryThreshold`(기본 80) 이하일 때 보인다. 충전 중 임계값을 넘으면 다시 숨는다.
+- **WiFi** — 연결이 끊겼을 때만 보인다. `hs.wifi.interfaceDetails().rssi` 가 0 이거나 없음.
+  SSID 는 위치 권한이 없으면 nil 이라 쓰지 않는다.
+- `obj.extras = { Battery = true, WiFi = true, batteryThreshold = 80 }`. 항목별로 끄거나 임계값을 바꾼다
+  (nil 이면 배터리로 돌 때만).
+- 이 스위치는 Spoon 이 소유한다. 사용자가 시스템 설정에서 손으로 바꿔도 다음 상태 변화 때 규칙대로 되돌아간다.
+  그만 쓸 때는 `restoreExtras()` 로 모두 켠다.
+- 규칙 계산(`wanted`, `changes`, `toPlace`, 플래그 변환, 상태 판독)은 `lib/rules.lua` 의 순수 함수다.
+
+### 배터리 임계값 메뉴
+
+구분자 메뉴의 `배터리 표시 ▸` 서브메뉴에서 `배터리로 돌 때만 / 50 / 60 / 70 / 80 / 90% 이하` 를 고른다
+(`lib/menu.lua` 의 `THRESHOLDS`). 고르면 `setBatteryThreshold` 가 값을 바꾸고 `hs.settings`
+(`Bartender.batteryThreshold`) 에 저장한 뒤 바로 `applyExtras` 한다.
+
+- 저장값은 `start()` 때 읽어 `obj.extras.batteryThreshold` 를 덮는다. init.lua 에 적은 값은 메뉴로 한 번도
+  바꾸지 않았을 때의 기본값이다 — 반대로 하면 리로드마다 메뉴 선택이 사라진다.
+- "배터리로 돌 때만"(nil)은 `false` 로 저장한다. `hs.settings.set(key, nil)` 은 키 삭제라 "고른 적 없음"과 구분되지 않는다.
+- 메뉴는 함수형(`setMenu(function)`)이라 열 때마다 현재 값에 체크가 붙는다.
+
+### 저장소 (2026-09-16 실측, macOS 27.0 26A428)
+
+시스템 설정 → Menu Bar 의 항목 스위치는 per-host 도메인의 정수 플래그다.
+
+```
+defaults -currentHost write com.apple.controlcenter Battery -int 2   # 메뉴바에 표시
+defaults -currentHost write com.apple.controlcenter Battery -int 8   # 숨김 (Control Center 에만)
+```
+
+- 쓰면 재시작 없이 바로 반영되고 양방향 모두 동작한다. 키가 없으면 표시 상태다.
+- 값은 8·24 가 숨김, 그 외(1·2·4·16)는 표시로 동작한다. "배터리 구동 중에만" 같은 중간 모드는 OS 에 없다 —
+  Battery·Wi-Fi 행에는 켬/끔 체크박스만 있고 "Show When Active" 는 화면 미러링·집중 모드 등에만 있다.
+- 예전 macOS 의 `NSStatusItem Visible <이름>` 키와 `killall ControlCenter` 는 27 에서 효과가 없다.
+- 확인 방법: 설정 앱의 Battery 체크박스를 접근성으로 눌러 전후의 `defaults -currentHost export` 를 비교했다.
+
+### 켠 항목을 구분자 오른쪽으로
+
+켜진 항목은 시스템이 저장해 둔 자리에 놓인다. 그 자리가 구분자 왼쪽이면 나타나자마자 접히고, 접힌
+시스템 항목은 AX 목록에서 사라져 그 상태로는 찾을 수도 끌 수도 없다. 그래서 켠 항목마다 `placeRight` 를
+부른다(위 "옮기기"). 어느 항목을 넘길지는 `rules.toPlace` 가 정한다.
+
+- `start()` 때는 켜져 있는 항목도 모두 부른다(`applyExtras({ placeAll = true })`) — 구분자를 다시 만들면
+  켜져 있던 항목이 접혀 있을 수 있다.
+- 식별자: MenuBarAgent 의 `AXExtrasMenuBar` 자식(AXHostingView 그룹) 안의 AXMenuBarItem 이 가진
+  `AXIdentifier`. `com.apple.menuextra.battery`, `com.apple.menuextra.wifi` (`rules.MENU_EXTRA_ID`).
+- 옮긴 자리는 숨겼다 다시 켜도 유지되지만, 구분자를 다시 만들면 접힐 수 있다. 그래서 "처음 한 번만"이
+  아니라 켤 때마다 확인한다. 이미 오른쪽이면 폭을 건드리지 않는다.
+- 옮길 항목 없이 바뀐 것(끈 것)만 있으면 `schedule()` 만 부른다.
+
+주의: MenuBarAgent 를 `killall` 하면 배터리·Wi-Fi 항목 객체가 사라져 플래그나 설정 UI 로도 다시 만들 수
+없다(2026-09-17 실측). 로그아웃·로그인으로만 돌아온다. ControlCenter 만 `killall` 한 경우는 항목이
+남았다(같은 날 재실측). 두 프로세스 모두 재시작하지 않는다.
+
+### 트리거
+
+- `hs.battery.watcher`, `hs.wifi.watcher`(SSIDChange · linkChange · powerChange) → `applyExtras()`
+- 60초 보정 타이머(접기와 공유) — 이벤트를 놓친 경우
+- 같은 값은 다시 쓰지 않는다.
 
 ## 파일
 
 ```
 Bartender.spoon/
-  init.lua            Spoon 본체 (sep, probe, 트리거, 코루틴 실행, placeRight)
+  init.lua            Spoon 본체 (sep, probe, 트리거, 코루틴 실행, placeRight, applyExtras)
   lib/fit.lua         폭 결정 로직 — hs.* 없는 순수 Lua (satisfied, signature, decide)
   lib/guard.lua       잠금·절전 판정 — hs.* 없는 순수 Lua
+  lib/menu.lua        구분자 메뉴 구성 — hs.* 없는 순수 Lua (build, batterySubmenu, statusTitle)
   lib/place.lua       옮기기 드래그 계획·판정 — hs.* 없는 순수 Lua (dragToRightOf, isRightOf)
+  lib/rules.lua       시스템 항목 규칙 — hs.* 없는 순수 Lua (wanted, changes, toPlace, 플래그 변환, 상태 판독)
   tests/run.lua       단위 테스트
   tests/fake_bar.lua  판독 결과를 흉내내는 가짜 메뉴바
   docs/design.md      이 문서

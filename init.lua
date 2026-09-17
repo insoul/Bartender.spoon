@@ -4,6 +4,9 @@
 --- 투명한 구분자 항목 하나를 메뉴바에 두고, 그 폭을 조절해 왼쪽 항목들을 오버플로로 밀어낸다.
 --- 구분자 왼쪽 = 접힘, 오른쪽 = 표시. 접힌 항목은 시스템 `«` 로 본다.
 ---
+--- 필요할 때만 보이면 되는 시스템 항목(배터리·Wi-Fi)은 접는 대신 시스템 설정 → Menu Bar 의 스위치를
+--- 상태에 따라 켜고 끈다. 꺼진 항목은 접힌 것이 아니라 없는 것이라 자리도 « 뒤 목록도 차지하지 않는다.
+---
 --- 설계와 실측 근거는 docs/design.md 에 있다.
 
 local obj = {}
@@ -20,11 +23,27 @@ local fit = dofile(spoonPath .. "lib/fit.lua")
 local guard = dofile(spoonPath .. "lib/guard.lua")
 local menu = dofile(spoonPath .. "lib/menu.lua")
 local place = dofile(spoonPath .. "lib/place.lua")
+local rules = dofile(spoonPath .. "lib/rules.lua")
+
+--- 시스템 항목 규칙. Battery/WiFi 를 false 로 두면 그 항목은 건드리지 않는다.
+---   Battery — 전원이 빠져 배터리로 돌 때, 또는 전원이 연결돼 있어도 잔량이 batteryThreshold(%) 이하일 때 보인다.
+---             batteryThreshold 가 nil 이면 배터리로 돌 때만이다.
+---   WiFi    — 연결이 끊겼을 때만 보인다.
+--- 이 스위치는 Spoon 이 소유한다 — 시스템 설정에서 손으로 바꿔도 다음 상태 변화 때 규칙대로 되돌아간다.
+--- batteryThreshold 는 구분자 메뉴의 "배터리 표시"로도 바꿀 수 있고, 그 값은 hs.settings 에 남아 start() 때
+--- 여기 적은 기본값을 덮는다. 메뉴로 한 번도 바꾸지 않았을 때만 이 값이 쓰인다.
+obj.extras = { Battery = true, WiFi = true, batteryThreshold = 80 }
 
 --- 구분자 식별: setTooltip 이 AX 의 AXHelp 로 실린다 (macOS 27.0 에서 실측 확인).
 --- 툴팁은 항목 폭에 영향을 주지 않으므로 탐색을 방해하지 않는다.
 local SEP_TOOLTIP = "bartender_sep"
 local SEP_AUTOSAVE = "bartender_sep"
+
+--- 시스템 항목 스위치가 저장되는 defaults 도메인. per-host(-currentHost) 이고 키는 항목 이름(Battery, WiFi),
+--- 값은 정수 플래그(lib/rules.lua 의 FLAG_*)다.
+local CC_DOMAIN = "com.apple.controlcenter"
+--- 메뉴로 고른 배터리 임계값을 저장하는 hs.settings 키. "배터리로 돌 때만"은 false 로 저장한다 — nil 은 키 삭제라 구분이 안 된다
+local SETTINGS_THRESHOLD = "Bartender.batteryThreshold"
 
 --- MenuBarAgent 의 오버플로 버튼 하나가 설명 문자열로 상태를 알린다.
 --- 접힌 항목이 있으면 « / "Show Hidden…", 없으면 » / "Hide Menu Bar Items".
@@ -170,17 +189,6 @@ function obj:setWidth(w)
 end
 
 --------------------------------------------------------------------------
--- 다른 Spoon 이 쓰는 조회
---------------------------------------------------------------------------
-
---- 구분자의 화면 프레임 {x, y, w, h}. 구분자가 없으면 nil.
-function obj:separatorFrame()
-  if not self.sep then return nil end
-  return self.sep:frame()
-end
-
-
---------------------------------------------------------------------------
 -- 메뉴
 --------------------------------------------------------------------------
 
@@ -189,6 +197,8 @@ function obj:menuItems()
   local state = {
     suspended = guard.isSuspended(self.suspended, focusedAppName()),
     width = self.width,
+    battery = self.extras.Battery,
+    batteryThreshold = self.extras.batteryThreshold,
   }
   if not state.suspended then
     local snap = self:probe()
@@ -200,11 +210,14 @@ function obj:menuItems()
       end
     end
   end
-  return menu.build(state, function()
-    -- 구분자를 옮긴 직후 누르는 용도다. 기억한 실패 서명을 버리고 다시 잰다.
-    self.failSignature = nil
-    self:fit()
-  end)
+  return menu.build(state, {
+    fit = function()
+      -- 구분자를 옮긴 직후 누르는 용도다. 기억한 실패 서명을 버리고 다시 잰다.
+      self.failSignature = nil
+      self:fit()
+    end,
+    setBatteryThreshold = function(t) self:setBatteryThreshold(t) end,
+  })
 end
 
 --------------------------------------------------------------------------
@@ -383,7 +396,7 @@ function obj:abort()
   return self
 end
 
---- 시스템 항목을 구분자 오른쪽으로 옮긴다. Barback 이 항목을 켰을 때 부른다.
+--- 시스템 항목을 구분자 오른쪽으로 옮긴다. applyExtras 가 항목을 켰을 때 부른다.
 --- 켜진 항목은 시스템이 저장해 둔 자리에 놓이는데, 그 자리가 구분자 왼쪽이면 나타나자마자 접히고
 --- 접힌 시스템 항목은 AX 목록에서 사라져 그 상태로는 찾을 수도 끌 수도 없다. 그래서 탐색을 끊고
 --- 폭을 0 으로 내려 항목을 드러낸 뒤 ⌘+드래그로 옮기고, 폭을 되돌려 다시 맞춘다.
@@ -516,6 +529,70 @@ function obj:place()
 end
 
 --------------------------------------------------------------------------
+-- 시스템 항목 켜고 끄기 — 배터리·Wi-Fi 를 필요할 때만
+--------------------------------------------------------------------------
+
+--- defaults 에 저장된 스위치 값을 읽는다. 키가 없으면 nil(= 보임).
+local function readVisible(name)
+  local out, ok = hs.execute(string.format('defaults -currentHost read %s %s 2>/dev/null', CC_DOMAIN, name))
+  if not ok then return nil end
+  return rules.flagToVisible(tonumber((out:gsub("%s+$", ""))))
+end
+
+local function writeVisible(name, visible)
+  hs.execute(string.format('defaults -currentHost write %s %s -int %d', CC_DOMAIN, name, rules.visibleToFlag(visible)))
+end
+
+--- 지금 상태를 읽어 규칙과 다른 스위치만 고친다.
+--- 켠 항목은 시스템이 저장해 둔 자리에 놓이는데 그 자리가 구분자 왼쪽이면 바로 접히므로 placeRight 로 옮긴다 —
+--- 끝나면 스스로 다시 맞춘다. 옮길 항목이 없는데 바뀐 것이 있으면 배치가 달라졌으니 다시 맞추라고만 예약한다.
+--- @param opts table|nil {placeAll = true} 면 막 켠 항목만이 아니라 켜져 있는 항목을 모두 확인한다 —
+---                       start() 때 쓴다. 구분자를 다시 만들면(Hammerspoon 리로드) 켜져 있던 항목이 접혀 있을 수 있다
+function obj:applyExtras(opts)
+  if not (self.extras.Battery or self.extras.WiFi) then return self end
+  local state = {
+    onBattery = rules.onBattery(hs.battery.powerSource()),
+    batteryPercent = hs.battery.percentage(),
+    wifiConnected = rules.wifiConnected(hs.wifi.interfaceDetails()),
+  }
+  local want = rules.wanted(state, self.extras)
+  local current = {}
+  for name in pairs(want) do current[name] = readVisible(name) end
+  local changes = rules.changes(want, current)
+  for _, change in ipairs(changes) do
+    writeVisible(change.name, change.visible)
+    self:log("%s 항목을 %s (%s)", change.name, change.visible and "켬" or "끔",
+             change.name == "Battery" and rules.batteryReason(state)
+                                      or (state.wifiConnected and "Wi-Fi 연결" or "Wi-Fi 끊김"))
+  end
+  local names = rules.toPlace(want, changes, opts and opts.placeAll)
+  for _, name in ipairs(names) do self:placeRight(rules.MENU_EXTRA_ID[name]) end
+  if #names == 0 and #changes > 0 then self:schedule() end
+  return self
+end
+
+--- 배터리 임계값을 바꾸고 저장한 뒤 바로 반영한다. 구분자 메뉴의 "배터리 표시"가 부른다.
+--- @param threshold number|nil nil 이면 배터리로 돌 때만 보인다
+function obj:setBatteryThreshold(threshold)
+  self.extras.batteryThreshold = threshold
+  hs.settings.set(SETTINGS_THRESHOLD, threshold or false)
+  self:log("배터리 임계값을 %s 로 바꿈", threshold and (threshold .. "%") or "배터리로 돌 때만")
+  return self:applyExtras()
+end
+
+--- 규칙을 적용하던 시스템 항목을 모두 다시 보이게 한다. 이 기능을 그만 쓸 때 부른다.
+--- stop() 은 감시만 멈추고 스위치는 마지막 상태 그대로 둔다.
+function obj:restoreExtras()
+  for name, enabled in pairs(self.extras) do
+    if enabled == true and readVisible(name) == false then
+      writeVisible(name, true)
+      self:log("%s 항목을 켬 (복원)", name)
+    end
+  end
+  return self
+end
+
+--------------------------------------------------------------------------
 -- Spoon 수명주기
 --------------------------------------------------------------------------
 
@@ -580,9 +657,24 @@ function obj:start()
   end)
   self.powerWatcher:start()
 
-  -- 앱이 제 항목 폭을 바꾸면 어떤 이벤트도 오지 않는다. 그 경우의 보정.
-  self.correctiveTimer = hs.timer.doEvery(CORRECTIVE, function() self:schedule() end)
+  -- 메뉴로 고른 배터리 임계값이 있으면 init.lua 의 기본값보다 우선한다
+  local saved = hs.settings.get(SETTINGS_THRESHOLD)
+  if saved ~= nil then self.extras.batteryThreshold = saved or nil end
 
+  self.batteryWatcher = hs.battery.watcher.new(function() self:applyExtras() end)
+  self.batteryWatcher:start()
+  self.wifiWatcher = hs.wifi.watcher.new(function() self:applyExtras() end)
+  self.wifiWatcher:watchingFor({ "SSIDChange", "linkChange", "powerChange" })
+  self.wifiWatcher:start()
+
+  -- 앱이 제 항목 폭을 바꾸면 어떤 이벤트도 오지 않는다. 그 경우의 보정. 전원·Wi-Fi 이벤트를 놓친 경우도 같이 잡는다.
+  self.correctiveTimer = hs.timer.doEvery(CORRECTIVE, function()
+    self:applyExtras()
+    self:schedule()
+  end)
+
+  -- 켜져 있는 시스템 항목도 확인한다. 구분자를 다시 만들었으니 접혀 있을 수 있다.
+  self:applyExtras({ placeAll = true })
   self:schedule()
   return self
 end
@@ -592,6 +684,8 @@ function obj:stop()
   self.placeQueue = {}
   -- 타이머는 참조를 잃으면 GC 로 사라지므로 전부 self 에 붙들어 두고 여기서 거둔다
   if self.correctiveTimer then self.correctiveTimer:stop(); self.correctiveTimer = nil end
+  if self.batteryWatcher then self.batteryWatcher:stop(); self.batteryWatcher = nil end
+  if self.wifiWatcher then self.wifiWatcher:stop(); self.wifiWatcher = nil end
   if self.screenWatcher then self.screenWatcher:stop(); self.screenWatcher = nil end
   if self.appWatcher then self.appWatcher:stop(); self.appWatcher = nil end
   if self.powerWatcher then self.powerWatcher:stop(); self.powerWatcher = nil end
