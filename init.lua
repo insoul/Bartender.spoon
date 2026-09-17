@@ -19,17 +19,6 @@ local spoonPath = debug.getinfo(1, "S").source:match("^@(.*[/\\])") or "./"
 local fit = dofile(spoonPath .. "lib/fit.lua")
 local guard = dofile(spoonPath .. "lib/guard.lua")
 local menu = dofile(spoonPath .. "lib/menu.lua")
-local autoshow = dofile(spoonPath .. "lib/autoshow.lua")
-
---- 상태에 따라 켜고 끌 시스템 항목. false 로 두면 그 항목은 건드리지 않는다.
---- Battery 는 배터리로 돌 때만, WiFi 는 연결이 끊겼을 때만 보인다.
---- 시스템 설정 → Menu Bar 의 해당 스위치를 이 Spoon 이 소유하게 된다 — 손으로 바꿔도 다음 상태
---- 변화 때 규칙대로 되돌아간다.
-obj.autoShow = { Battery = true, WiFi = true }
-
---- 시스템 항목 스위치가 저장되는 defaults 도메인. per-host(-currentHost) 이고 키는 항목 이름(Battery, WiFi),
---- 값은 정수 플래그(lib/autoshow.lua 의 FLAG_*)다.
-local CC_DOMAIN = "com.apple.controlcenter"
 
 --- 구분자 식별: setTooltip 이 AX 의 AXHelp 로 실린다 (macOS 27.0 에서 실측 확인).
 --- 툴팁은 항목 폭에 영향을 주지 않으므로 탐색을 방해하지 않는다.
@@ -153,41 +142,6 @@ function obj:setWidth(w)
   if not self.sep then return end
   self.width = w
   self.sep:setIcon(blankImage(w), false)
-end
-
---------------------------------------------------------------------------
--- 상태별 시스템 항목 켜기·끄기
---------------------------------------------------------------------------
-
---- defaults 에 저장된 스위치 값을 읽는다. 키가 없으면 nil(= 보임).
-local function readVisible(name)
-  local out, ok = hs.execute(string.format('defaults -currentHost read %s %s 2>/dev/null', CC_DOMAIN, name))
-  if not ok then return nil end
-  return autoshow.flagToVisible(tonumber((out:gsub("%s+$", ""))))
-end
-
-local function writeVisible(name, visible)
-  hs.execute(string.format('defaults -currentHost write %s %s -int %d', CC_DOMAIN, name, autoshow.visibleToFlag(visible)))
-end
-
---- 지금 상태를 읽어 규칙과 다른 스위치만 고친다. 바뀐 것이 있으면 배치가 달라졌으니 다시 맞춘다.
-function obj:applyAutoShow()
-  local state = {
-    onBattery = autoshow.onBattery(hs.battery.powerSource()),
-    wifiConnected = autoshow.wifiConnected(hs.wifi.interfaceDetails()),
-  }
-  local want = autoshow.wanted(state, self.autoShow)
-  local current = {}
-  for name in pairs(want) do current[name] = readVisible(name) end
-  local changes = autoshow.changes(want, current)
-  for _, change in ipairs(changes) do
-    writeVisible(change.name, change.visible)
-    self:log("%s 항목을 %s (%s)", change.name, change.visible and "켬" or "끔",
-             change.name == "Battery" and (state.onBattery and "배터리 구동" or "전원 연결")
-                                      or (state.wifiConnected and "Wi-Fi 연결" or "Wi-Fi 끊김"))
-  end
-  if #changes > 0 then self:schedule() end
-  return self
 end
 
 --------------------------------------------------------------------------
@@ -402,18 +356,6 @@ function obj:start()
   -- 앱이 제 항목 폭을 바꾸면 어떤 이벤트도 오지 않는다. 그 경우의 보정.
   self.correctiveTimer = hs.timer.doEvery(CORRECTIVE, function() self:schedule() end)
 
-  -- 전원·Wi-Fi 상태가 바뀌면 시스템 항목 스위치를 규칙대로 맞춘다. 이벤트를 놓친 경우를 위해
-  -- 60초 보정에서도 한 번씩 본다.
-  if self.autoShow.Battery or self.autoShow.WiFi then
-    self.batteryWatcher = hs.battery.watcher.new(function() self:applyAutoShow() end)
-    self.batteryWatcher:start()
-    self.wifiWatcher = hs.wifi.watcher.new(function() self:applyAutoShow() end)
-    self.wifiWatcher:watchingFor({ "SSIDChange", "linkChange", "powerChange" })
-    self.wifiWatcher:start()
-    self.autoShowTimer = hs.timer.doEvery(CORRECTIVE, function() self:applyAutoShow() end)
-    self:applyAutoShow()
-  end
-
   self:schedule()
   return self
 end
@@ -425,9 +367,6 @@ function obj:stop()
   if self.settleTimer then self.settleTimer:stop(); self.settleTimer = nil end
   if self.watchdog then self.watchdog:stop(); self.watchdog = nil end
   if self.correctiveTimer then self.correctiveTimer:stop(); self.correctiveTimer = nil end
-  if self.autoShowTimer then self.autoShowTimer:stop(); self.autoShowTimer = nil end
-  if self.batteryWatcher then self.batteryWatcher:stop(); self.batteryWatcher = nil end
-  if self.wifiWatcher then self.wifiWatcher:stop(); self.wifiWatcher = nil end
   if self.screenWatcher then self.screenWatcher:stop(); self.screenWatcher = nil end
   if self.appWatcher then self.appWatcher:stop(); self.appWatcher = nil end
   if self.powerWatcher then self.powerWatcher:stop(); self.powerWatcher = nil end

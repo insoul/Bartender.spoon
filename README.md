@@ -70,14 +70,10 @@ osascript -e 'tell application "Hammerspoon" to execute lua code
 
 실패하면 `error` 로 올라오므로 osascript 가 0 이 아닌 상태로 끝난다.
 
-## 배터리·Wi-Fi 는 필요할 때만
+## 배터리·Wi-Fi 를 필요할 때만 보이기
 
-전원이 빠져 배터리로 돌 때만 배터리 항목이, Wi-Fi 가 끊겼을 때만 Wi-Fi 항목이 메뉴바에 나온다.
-평소에는 시스템 설정 → Menu Bar 의 스위치를 꺼 둔 것과 같아 자리도 `«` 뒤 목록도 차지하지 않는다.
-켜질 때 보이는 자리에 나오게 하려면 두 항목을 구분자 **오른쪽**에 둔다.
-
-끄려면 `start()` 전에 `spoon.Bartender.autoShow = { Battery = false, WiFi = false }`.
-이 스위치는 Spoon 이 소유하므로 시스템 설정에서 손으로 바꿔도 다음 상태 변화 때 규칙대로 돌아간다.
+별도 Spoon 인 [Barback.spoon](../Barback.spoon) 이 맡는다. 함께 쓰면 Barback 이 스위치를 바꿀 때
+이 Spoon 에 다시 맞추라고 알려 준다.
 
 ## macOS 27 주의사항
 
