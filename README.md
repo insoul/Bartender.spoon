@@ -65,15 +65,29 @@ spoon.Bartender.lastWidth    -- 마지막 탐색이 고른 폭
 ```sh
 osascript -e 'tell application "Hammerspoon" to execute lua code
   "return dofile(\"/Users/insoul/.hammerspoon/Spoons/Bartender.spoon/tests/run.lua\")"'
-# => 75 passed, 0 failed
+# => 123 passed, 0 failed
 ```
 
 실패하면 `error` 로 올라오므로 osascript 가 0 이 아닌 상태로 끝난다.
 
+## 다른 Spoon 이 쓰는 API
+
+```lua
+spoon.Bartender:separatorFrame()          -- 구분자의 화면 프레임 {x, y, w, h}. 없으면 nil
+spoon.Bartender:placeRight(axIdentifier)  -- 시스템 항목을 구분자 오른쪽으로 옮긴다
+spoon.Bartender:schedule()                -- 배치가 달라졌으니 다시 맞추라고 알린다
+spoon.Bartender:abort()                   -- 진행 중인 탐색과 예약을 끊는다
+```
+
+`placeRight` 는 켜진 시스템 항목(배터리·Wi-Fi)이 구분자 왼쪽 자리에 놓여 접혔을 때 쓴다. 접힌
+시스템 항목은 AX 목록에서 사라져 그 상태로는 끌 수 없으므로, 탐색을 끊고 폭을 0 으로 내려 항목을
+드러낸 뒤 ⌘+드래그를 합성해 구분자 오른쪽에 놓고 폭을 되돌려 다시 맞춘다(1~2초 깜빡임). 항목이
+이미 오른쪽에 있으면 폭을 건드리지 않는다. 연달아 부르면 순서대로 처리한다.
+
 ## 배터리·Wi-Fi 를 필요할 때만 보이기
 
-별도 Spoon 인 [Barback.spoon](../Barback.spoon) 이 맡는다. 함께 쓰면 Barback 이 스위치를 바꿀 때
-이 Spoon 에 다시 맞추라고 알려 준다.
+별도 Spoon 인 [Barback.spoon](../Barback.spoon) 이 맡는다. 함께 쓰면 Barback 이 스위치를 켤 때
+`placeRight` 로 항목을 구분자 오른쪽에 두고, 끌 때 `schedule` 로 다시 맞추라고 알려 준다.
 
 ## macOS 27 주의사항
 
@@ -94,6 +108,9 @@ osascript -e 'tell application "Hammerspoon" to execute lua code
   오른쪽 항목 폭이 몇 pt 만 늘어도 구분자가 접히고 왼쪽 항목이 되살아난다. 그러면 다음
   트리거가 다시 맞춘다. 여유를 두려면 항목을 더 접거나 시스템 설정 → Menu Bar 에서 끈다.
 - 배터리 같은 시스템 항목은 접히면 AX 목록에서 사라진다. 메뉴의 "접힘 N개"에는 세지 않는다.
+- 시스템 항목의 저장 위치(`NSStatusItem Preferred Position <이름>`)는 켤 때 읽히지 않는다. 자리를
+  바꾸는 길은 ⌘+드래그뿐이다. 구분자를 다시 만들면(Hammerspoon 리로드) 구분자의 저장 자리와 겹치는
+  항목이 구분자 왼쪽으로 밀려 접힐 수 있다 — Barback 이 `start()` 때 켜져 있는 항목을 다시 확인한다.
 - 탐색 상한은 주 화면 폭(`hs.screen.mainScreen():frame().w`)이다. 노트북을 닫고 넓은 외장
   화면만 쓰는 구성에서도 상한이 모자라지 않는다.
 - 여유를 넘는 폭에서는 시스템이 메뉴바를 다시 배치하지 않는다. 항목 폭만 커지고 좌표는 그대로라
@@ -104,9 +121,10 @@ osascript -e 'tell application "Hammerspoon" to execute lua code
 ## 파일
 
 ```
-init.lua        Spoon 본체 — 구분자, 판독기, 트리거
+init.lua        Spoon 본체 — 구분자, 판독기, 트리거, 옮기기
 lib/fit.lua     폭 결정 로직 (순수 Lua)
 lib/guard.lua   잠금·절전 판정 (순수 Lua)
+lib/place.lua   항목을 구분자 오른쪽으로 옮기는 드래그 계획 (순수 Lua)
 tests/          단위 테스트
 docs/design.md  설계와 실측 근거
 ```

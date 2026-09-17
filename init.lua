@@ -19,6 +19,7 @@ local spoonPath = debug.getinfo(1, "S").source:match("^@(.*[/\\])") or "./"
 local fit = dofile(spoonPath .. "lib/fit.lua")
 local guard = dofile(spoonPath .. "lib/guard.lua")
 local menu = dofile(spoonPath .. "lib/menu.lua")
+local place = dofile(spoonPath .. "lib/place.lua")
 
 --- 구분자 식별: setTooltip 이 AX 의 AXHelp 로 실린다 (macOS 27.0 에서 실측 확인).
 --- 툴팁은 항목 폭에 영향을 주지 않으므로 탐색을 방해하지 않는다.
@@ -44,6 +45,12 @@ local DEBOUNCE = 0.5
 local CORRECTIVE = 60
 --- 이 시간 안에 탐색이 끝나지 않으면 상태가 굳은 것으로 보고 되돌린다
 local SEARCH_TIMEOUT = 40
+--- placeRight 가 이 시간 안에 끝나지 않으면 굳은 것으로 보고 되돌린다
+local PLACE_TIMEOUT = 10
+--- 막 켜진 시스템 항목이 메뉴바에 나타나기를 기다리는 시간(초)
+local APPEAR_DELAY = 1.0
+--- ⌘+드래그 한 걸음 사이의 간격(마이크로초)
+local DRAG_STEP_US = 15000
 --- 아이콘 높이. 메뉴바 항목의 표준 높이다
 local ICON_HEIGHT = 22
 --- 메뉴바 줄로 인정하는 y 범위. 이 밖의 항목은 시스템이 화면 밖에 치워 둔 것이다
@@ -149,11 +156,11 @@ end
 --------------------------------------------------------------------------
 
 --- 구분자의 화면 프레임 {x, y, w, h}. 구분자가 없으면 nil.
---- Barback 이 켠 항목을 구분자 오른쪽으로 옮길 때 기준으로 쓴다.
 function obj:separatorFrame()
   if not self.sep then return nil end
   return self.sep:frame()
 end
+
 
 --------------------------------------------------------------------------
 -- 메뉴
@@ -304,6 +311,193 @@ function obj:schedule()
 end
 
 --------------------------------------------------------------------------
+-- 옮기기 — 다른 Spoon 이 쓰는 작업
+--------------------------------------------------------------------------
+
+--- MenuBarAgent 가 띄운 시스템 항목의 프레임. AXHostingView 그룹 안의 AXMenuBarItem 이 가진
+--- AXIdentifier 로 찾는다. 없으면 nil — 접힌 시스템 항목은 AX 목록에서 아예 사라진다.
+local function menuExtraFrame(identifier)
+  for _, app in ipairs(hs.application.runningApplications()) do
+    if app:name() == "MenuBarAgent" then
+      local element = hs.axuielement.applicationElement(app)
+      local extras = element and element:attributeValue("AXExtrasMenuBar")
+      for _, child in ipairs(extras and extras:attributeValue("AXChildren") or {}) do
+        for _, inner in ipairs(child:attributeValue("AXChildren") or {}) do
+          if inner:attributeValue("AXIdentifier") == identifier then
+            return child:attributeValue("AXFrame")
+          end
+        end
+      end
+    end
+  end
+  return nil
+end
+
+--- ⌘ 를 누른 채 from 에서 to 로 끄는 마우스 이벤트를 합성한다. 마우스 위치는 끝나면 되돌린다.
+--- usleep 으로 잠깐 막지만 이벤트는 다른 프로세스(MenuBarAgent)가 받으므로 전달에는 지장이 없다.
+local function commandDrag(from, to)
+  local saved = hs.mouse.absolutePosition()
+  local ev = hs.eventtap.event
+  local mods = { "cmd" }
+  ev.newMouseEvent(ev.types.leftMouseDown, from, mods):post()
+  hs.timer.usleep(DRAG_STEP_US * 4)
+  local steps = 12
+  for i = 1, steps do
+    local t = i / steps
+    ev.newMouseEvent(ev.types.leftMouseDragged,
+      { x = from.x + (to.x - from.x) * t, y = from.y + (to.y - from.y) * t }, mods):post()
+    hs.timer.usleep(DRAG_STEP_US)
+  end
+  ev.newMouseEvent(ev.types.leftMouseUp, to, mods):post()
+  hs.timer.usleep(DRAG_STEP_US * 4)
+  hs.mouse.absolutePosition(saved)
+end
+
+--- 진행 중인 탐색과 예약을 모두 끊는다. 세대를 올리므로 기다리던 코루틴은 깨어나서 스스로 끝난다.
+function obj:abort()
+  self.generation = self.generation + 1
+  if self.debounce then self.debounce:stop(); self.debounce = nil end
+  if self.settleTimer then self.settleTimer:stop(); self.settleTimer = nil end
+  if self.watchdog then self.watchdog:stop(); self.watchdog = nil end
+  self.running = false
+  self.pending = false
+  self.placing = false
+  return self
+end
+
+--- 시스템 항목을 구분자 오른쪽으로 옮긴다. Barback 이 항목을 켰을 때 부른다.
+--- 켜진 항목은 시스템이 저장해 둔 자리에 놓이는데, 그 자리가 구분자 왼쪽이면 나타나자마자 접히고
+--- 접힌 시스템 항목은 AX 목록에서 사라져 그 상태로는 찾을 수도 끌 수도 없다. 그래서 탐색을 끊고
+--- 폭을 0 으로 내려 항목을 드러낸 뒤 ⌘+드래그로 옮기고, 폭을 되돌려 다시 맞춘다.
+--- 옮긴 자리는 시스템이 저장하므로 보통 처음 한 번만 움직인다.
+--- 연달아 부르면 순서대로 처리한다. 구분자가 없거나 잠금·절전 중이면 아무것도 하지 않는다.
+--- @param identifier string 항목의 AXIdentifier (예: "com.apple.menuextra.battery")
+function obj:placeRight(identifier)
+  if not self.sep then return self end
+  if guard.isSuspended(self.suspended, focusedAppName()) then
+    self:log("잠금·절전 중 — %s 항목을 옮기지 않는다", identifier)
+    return self
+  end
+  self.placeQueue[#self.placeQueue + 1] = identifier
+  if self.placing then return self end
+  -- 탐색 중이면 끊는다. 끝나기를 기다리면 폭이 자라 항목이 더 깊이 접힐 뿐이다.
+  self:abort()
+  -- 큐를 다 비운 뒤에 되돌릴 폭. 항목마다 되돌리면 두 번째 항목이 폭 0 을 저장해 버린다.
+  self.placeSaved = self.width
+  self.placeTouched = false
+  self:place()
+  return self
+end
+
+--- 코루틴 안에서만 쓴다. 시스템 항목의 프레임이 두 번 연속 같을 때까지 기다렸다 돌려준다.
+--- 막 나타났거나 폭을 바꾼 직후의 항목은 아직 움직이는 중이라 그 좌표를 잡으면 드래그가 빗나간다.
+--- 끝까지 안정되지 않으면 마지막 판독을, 항목이 없으면 nil 을 돌려준다.
+function obj:stableExtraFrame(identifier, generation)
+  local last = nil
+  for _ = 1, math.floor(SETTLE_MAX / SETTLE_STEP) do
+    sleep(self, SETTLE_STEP)
+    if self.generation ~= generation then error(ABORTED, 0) end
+    local frame = menuExtraFrame(identifier)
+    if frame and last and frame.x == last.x then return frame end
+    last = frame
+  end
+  return last
+end
+
+--- placeQueue 의 첫 항목을 옮기고, 남은 것이 있으면 이어서 옮긴다. 옮기는 동안 running 을 잡아
+--- 트리거가 fit 을 끼워 넣지 못하게 하고, 큐를 다 비우면 schedule() 로 넘긴다. 폭을 건드렸으면
+--- 되돌려 둔다 — 항목이 오른쪽으로 갔으면 그 폭이 그대로 만족하므로 탐색 없이 끝나고, 아니면 평소대로 탐색한다.
+function obj:place()
+  local identifier = table.remove(self.placeQueue, 1)
+  if not identifier then return self end
+  self.running = true
+  self.placing = true
+  local generation = self.generation
+
+  self.watchdog = hs.timer.doAfter(PLACE_TIMEOUT, function()
+    self.watchdog = nil
+    self:log("%s 항목 옮기기가 %d초 안에 끝나지 않았다 — 상태를 초기화한다", identifier, PLACE_TIMEOUT)
+    self:abort()
+    self.placeQueue = {}
+    self:setWidth(self.placeSaved)
+    self:schedule()
+  end)
+
+  local co = coroutine.create(function()
+    local ok, err = pcall(function()
+      -- 1. 막 켜진 항목이 나타나기를 기다렸다가 지금 폭에서 먼저 본다. 보이는 데다 구분자 오른쪽이면
+      --    손댈 것이 없다 — 폭 0 을 거치면 메뉴바가 1~2초 깜빡이므로 저장된 자리가 맞는 보통의 경우는 건너뛴다.
+      sleep(self, APPEAR_DELAY)
+      if self.generation ~= generation then error(ABORTED, 0) end
+      local item = menuExtraFrame(identifier)
+      if place.isRightOf(item, self.sep:frame()) then
+        self:log("%s 항목은 이미 구분자 오른쪽에 있다", identifier)
+        return
+      end
+      -- 2. 접혔거나 구분자 왼쪽이다. 폭 0 으로 내려 드러낸다
+      self.placeTouched = true
+      local before = layoutKey(self:probe())
+      self:setWidth(0)
+      self:settle(generation, before)
+      item = self:stableExtraFrame(identifier, generation)
+      if item == nil then
+        self:log("%s 항목이 메뉴바에 나타나지 않아 옮기지 못함", identifier)
+        return
+      end
+      -- 3. 구분자 오른쪽으로 끈다. 빗나가면 한 번 더 끈다
+      for _ = 1, 2 do
+        local drag = place.dragToRightOf(item, self.sep:frame())
+        if drag == nil then
+          self:log("%s 항목은 이미 구분자 오른쪽에 있다", identifier)
+          return
+        end
+        before = layoutKey(self:probe())
+        commandDrag(drag.from, drag.to)
+        self:settle(generation, before)
+        item = self:stableExtraFrame(identifier, generation)
+        if place.isRightOf(item, self.sep:frame()) then
+          self:log("%s 항목을 구분자 오른쪽으로 옮김", identifier)
+          return
+        end
+        if item == nil then break end
+      end
+      self:log("%s 항목을 구분자 오른쪽으로 옮기지 못함", identifier)
+    end)
+
+    -- 세대가 바뀌었으면 abort 나 감시견이 이미 상태를 정리했다
+    if self.generation ~= generation then return end
+
+    if self.watchdog then self.watchdog:stop(); self.watchdog = nil end
+    self.running = false
+    self.placing = false
+    if not ok and err ~= ABORTED then
+      hs.printf("[Bartender] %s 항목 옮기기 실패: %s", identifier, tostring(err))
+    end
+    if #self.placeQueue > 0 then
+      self:place()   -- 코루틴 안에서 새 코루틴을 만드는 것은 안전하다
+      return
+    end
+    -- 폭을 건드렸으면 되돌린다 — 그 폭이면 만족 점검이 폭 0 을 거치지 않는다. 배치가 달라졌으니
+    -- 실패 기억은 버린다. 어느 쪽이든 끊었던 탐색을 대신해 한 번 맞춘다.
+    if self.placeTouched then
+      self.failSignature = nil
+      self:setWidth(self.placeSaved)
+    end
+    self.pending = false
+    self:schedule()
+  end)
+
+  local ok, err = coroutine.resume(co)
+  if not ok then
+    if self.watchdog then self.watchdog:stop(); self.watchdog = nil end
+    self.running = false
+    self.placing = false
+    hs.printf("[Bartender] %s 항목 옮기기 시작 실패: %s", identifier, tostring(err))
+  end
+  return self
+end
+
+--------------------------------------------------------------------------
 -- Spoon 수명주기
 --------------------------------------------------------------------------
 
@@ -317,6 +511,10 @@ function obj:init()
   self.lastLog = nil
   self.failSignature = nil
   self.suspended = false
+  self.placing = false
+  self.placeQueue = {}
+  self.placeSaved = 0
+  self.placeTouched = false
   return self
 end
 
@@ -372,18 +570,14 @@ function obj:start()
 end
 
 function obj:stop()
-  self.generation = self.generation + 1
+  self:abort()
+  self.placeQueue = {}
   -- 타이머는 참조를 잃으면 GC 로 사라지므로 전부 self 에 붙들어 두고 여기서 거둔다
-  if self.debounce then self.debounce:stop(); self.debounce = nil end
-  if self.settleTimer then self.settleTimer:stop(); self.settleTimer = nil end
-  if self.watchdog then self.watchdog:stop(); self.watchdog = nil end
   if self.correctiveTimer then self.correctiveTimer:stop(); self.correctiveTimer = nil end
   if self.screenWatcher then self.screenWatcher:stop(); self.screenWatcher = nil end
   if self.appWatcher then self.appWatcher:stop(); self.appWatcher = nil end
   if self.powerWatcher then self.powerWatcher:stop(); self.powerWatcher = nil end
   if self.sep then self.sep:delete(); self.sep = nil end
-  self.running = false
-  self.pending = false
   return self
 end
 

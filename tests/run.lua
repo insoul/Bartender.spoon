@@ -3,12 +3,13 @@
 ---   osascript -e 'tell application "Hammerspoon" to execute lua code
 ---     "return dofile(\"<spoon>/tests/run.lua\")"'
 --- 통과하면 요약 문자열을 돌려주고, 하나라도 실패하면 error 로 올린다.
---- 이 파일과 fake_bar, lib/fit 은 hs.* 를 쓰지 않는다.
+--- 이 파일과 fake_bar, lib/fit, lib/place 는 hs.* 를 쓰지 않는다.
 
 local here = debug.getinfo(1, "S").source:match("^@(.*[/\\])") or "./"
 local fit = dofile(here .. "../lib/fit.lua")
 local guard = dofile(here .. "../lib/guard.lua")
 local menuBuilder = dofile(here .. "../lib/menu.lua")
+local place = dofile(here .. "../lib/place.lua")
 local fakeBar = dofile(here .. "fake_bar.lua")
 
 local passed, failures = 0, {}
@@ -550,6 +551,24 @@ do
   check("satisfied: 구분자 오른쪽 항목은 상관없다", fit.satisfied(snapshot(920, { 810, 980 }, 900)))
   check("satisfied: 스냅샷이 없으면 거짓", not fit.satisfied(nil))
   check("satisfied: 구분자가 없으면 거짓", not fit.satisfied(snapshot(nil, { 810 }, 900)))
+end
+
+--------------------------------------------------------------------------
+-- 27. 항목을 구분자 오른쪽으로 옮기는 ⌘+드래그 계획
+--------------------------------------------------------------------------
+do
+  local sep = { x = 900, y = 0, w = 150, h = 24 }
+  local d = place.dragToRightOf({ x = 700, y = 0, w = 26, h = 24 }, sep)
+  check("드래그: 왼쪽에 있으면 계획이 나온다", d ~= nil)
+  eq("드래그: 시작은 항목 중심", d.from.x, 713)
+  eq("드래그: 끝은 구분자 오른쪽 + 여백 + 반폭", d.to.x, 900 + 150 + 4 + 13)
+  eq("드래그: y 는 항목 중심", d.to.y, 12)
+  eq("드래그: 이미 오른쪽이면 nil", place.dragToRightOf({ x = 1100, y = 0, w = 26, h = 24 }, sep), nil)
+  eq("드래그: 항목이 없으면 nil", place.dragToRightOf(nil, sep), nil)
+  eq("드래그: 구분자가 없으면 nil", place.dragToRightOf({ x = 700, y = 0, w = 26, h = 24 }, nil), nil)
+  check("옮겨짐 판정: 구분자 오른쪽 끝을 넘으면 참", place.isRightOf({ x = 1060, w = 26 }, { x = 1040, w = 18 }))
+  check("옮겨짐 판정: 구분자와 겹치거나 왼쪽이면 거짓", not place.isRightOf({ x = 1027, w = 22 }, { x = 1040, w = 18 }))
+  check("옮겨짐 판정: 항목이 없으면 거짓", not place.isRightOf(nil, { x = 1040, w = 18 }))
 end
 
 --------------------------------------------------------------------------
