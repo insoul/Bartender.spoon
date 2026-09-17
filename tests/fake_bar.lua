@@ -16,6 +16,7 @@ local fakeBar = {}
 ---   noChevron  true 면 접힌 항목이 없을 때 버튼 자체가 없는 것으로 본다 (여유가 많은 화면)
 ---   deadZone   이 폭 이상은 시스템이 배치에 반영하지 않는다 (폭 0 과 같은 판독값)
 ---   vanish     key 집합. 접히면 판독 목록에서 아예 빠지는 항목 (시스템 항목이 그렇다)
+---   pinned     true 면 카메라·마이크 인디케이터 같은 고정 항목이 떠 있는 것으로 본다
 ---   widths     key → 항목 폭. 없으면 30
 --- @return setWidth, probe, trace  trace 는 setWidth 로 적용된 폭의 기록
 function fakeBar.new(opts)
@@ -44,6 +45,7 @@ function fakeBar.new(opts)
       chevronX = anyHidden and CHEVRON_X or nil,
       -- 접힌 것이 없을 때: 여유가 빠듯하면 » 가 있고, 아주 많으면 버튼 자체가 없다
       expanded = (not anyHidden) and not opts.noChevron,
+      pinned = opts.pinned or false,
     }
     local foldRank, showRank = 0, 0
     local passedSep = false

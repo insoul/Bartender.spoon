@@ -9,7 +9,8 @@ local fit = {}
 ---     sep      = {key = <string>, x = <number>} 또는 nil,
 ---     chevronX = <number> 또는 nil,   -- « 의 x. 접힌 항목이 없으면 nil
 ---     expanded = <boolean>,           -- » 버튼이 있다. 사용자가 펼쳐 둔 상태다
----     items    = { {key = <string>, x = <number>, w = <number>}, ... },  -- 구분자를 뺀 나머지. w 는 항목 폭
+---     pinned   = <boolean>,           -- 카메라·마이크 인디케이터처럼 접히지도 옮겨지지도 않는 시스템 항목이 떠 있다
+---     items    = { {key = <string>, x = <number>, w = <number>}, ... },  -- 구분자·고정 항목을 뺀 나머지. w 는 항목 폭
 ---   }
 --- 메뉴바 버튼은 세 상태를 가진다:
 ---   « 있음(chevronX)      — 접힌 항목이 있다
@@ -137,6 +138,14 @@ function fit.decide(setWidth, probe, opts)
   -- 버튼이 아예 없는 상태는 여기에 해당하지 않는다 — 접힌 것이 없을 뿐이고, 폭을 키우면 접힌다.
   if snap.expanded then
     log("메뉴바가 펼쳐진 상태다 — 폭을 그대로 둔다")
+    return currentWidth, opts.lastFailSig
+  end
+
+  -- 고정 항목이 떠 있는 동안도 개입하지 않는다. 시스템이 그 자리를 내느라 구분자를 접어 두는데,
+  -- 폭을 바꿔도 고정 항목은 접히지 않아 탐색이 헛돌고, 항목이 사라지면 시스템이 배치를 스스로
+  -- 되돌린다. 만족 판정도 미룬다 — 이 상태에서 내린 판단은 항목이 사라지면 틀린 것이 된다.
+  if snap.pinned then
+    log("카메라·마이크 인디케이터가 떠 있다 — 폭을 그대로 둔다")
     return currentWidth, opts.lastFailSig
   end
 

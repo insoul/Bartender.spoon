@@ -572,6 +572,53 @@ do
 end
 
 --------------------------------------------------------------------------
+-- 28. 카메라·마이크 인디케이터가 떠 있으면 폭을 건드리지 않는다
+--------------------------------------------------------------------------
+do
+  local SIG = "기억해 둔 실패 서명"
+
+  -- (a) 시스템이 인디케이터 자리를 내느라 구분자를 접은 상태 — 만족은 아니지만 탐색하지 않는다
+  local setWidth, probe, trace = fakeBar.new({
+    order = { "H", "A", "SEP", "B" },
+    hiddenFor = function() return { "H", "A", "SEP" } end,
+    width = 160,
+    pinned = true,
+  })
+  local logged = false
+  local w, sig = fit.decide(setWidth, probe, {
+    currentWidth = 160, lastFailSig = SIG, log = function() logged = true end,
+  })
+  eq("인디케이터: 현재 폭을 그대로 돌려준다", w, 160)
+  eq("인디케이터: setWidth 를 부르지 않는다", #trace, 0)
+  eq("인디케이터: 기억한 서명을 그대로 돌려준다", sig, SIG)
+  check("인디케이터: 로그를 남겼다", logged)
+
+  -- (b) 인디케이터가 떠 있는데 왼쪽에 보이는 항목이 있어도 탐색하지 않는다
+  local setWidth2, probe2, trace2 = fakeBar.new({
+    order = { "H", "A", "SEP", "B" },
+    hiddenFor = function() return { "H" } end,
+    width = 0,
+    pinned = true,
+  })
+  local w2 = fit.decide(setWidth2, probe2, { currentWidth = 0 })
+  eq("인디케이터+왼쪽 노출: 폭 0 그대로", w2, 0)
+  eq("인디케이터+왼쪽 노출: setWidth 를 부르지 않는다", #trace2, 0)
+
+  -- (c) 인디케이터가 사라지면 평소대로 탐색한다
+  local setWidth3, probe3, trace3 = fakeBar.new({
+    order = { "H", "A", "SEP", "B" },
+    hiddenFor = thresholds({
+      { from = 300, hidden = { "H", "A", "SEP" } },
+      { from = 100, hidden = { "H", "A" } },
+    }),
+    pinned = false,
+  })
+  local w3 = fit.decide(setWidth3, probe3)
+  check("인디케이터 없음: 탐색해서 [100,300) 안을 고른다", w3 >= 100 and w3 < 300, "폭 " .. tostring(w3))
+  check("인디케이터 없음: setWidth 를 불렀다", #trace3 > 0)
+end
+
+--------------------------------------------------------------------------
 
 local summary = string.format("%d passed, %d failed", passed, #failures)
 if #failures > 0 then

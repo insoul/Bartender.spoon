@@ -56,6 +56,13 @@ local ICON_HEIGHT = 22
 --- 메뉴바 줄로 인정하는 y 범위. 이 밖의 항목은 시스템이 화면 밖에 치워 둔 것이다
 local MENUBAR_ROW_HEIGHT = 40
 
+--- 시스템이 자리를 고정하는 MenuBarAgent 항목. 접히지 않고 ⌘+드래그로도 옮겨지지 않는다
+--- (macOS 27.0 실측). 떠 있는 동안 시스템이 구분자를 접어 자리를 내고 사라지면 배치를 스스로
+--- 되돌리므로, 판독 목록에서 빼고 pinned 로만 알려 탐색이 폭을 건드리지 않게 한다.
+local PINNED_IDS = {
+  ["com.apple.menuextra.audiovideo"] = true,   -- 카메라·마이크 사용 중 인디케이터
+}
+
 --- 폭 w 의 거의 투명한 이미지. 알파 0 이면 항목이 그려지지 않으므로 0.001 을 쓴다.
 local function blankImage(w)
   local canvas = hs.canvas.new({ x = 0, y = 0, w = math.max(w, 1), h = ICON_HEIGHT })
@@ -101,15 +108,24 @@ end
 -- 판독기
 --------------------------------------------------------------------------
 
+--- MenuBarAgent 항목(AXHostingView 그룹)이 고정 항목인가. 식별자는 안쪽 AXMenuBarItem 에 실린다.
+local function isPinned(child)
+  for _, inner in ipairs(child:attributeValue("AXChildren") or {}) do
+    if PINNED_IDS[inner:attributeValue("AXIdentifier")] then return true end
+  end
+  return false
+end
+
 --- 모든 실행 중 앱의 AXExtrasMenuBar 자식을 모아 fit.decide 가 쓰는 스냅샷으로 만든다.
 --- key 는 pid 와 앱 안에서의 순서로 만든다 — 제목은 시계처럼 매 초 바뀌는 것이 있어 못 쓴다.
 function obj:probe()
-  local snap = { items = {}, chevronX = nil, expanded = false, sep = nil }
+  local snap = { items = {}, chevronX = nil, expanded = false, sep = nil, pinned = false }
   for _, app in ipairs(hs.application.runningApplications()) do
     local ok, element = pcall(hs.axuielement.applicationElement, app)
     if ok and element then
       local extras = element:attributeValue("AXExtrasMenuBar")
       if extras then
+        local systemAgent = app:name() == "MenuBarAgent"
         local children = extras:attributeValue("AXChildren") or {}
         for index, child in ipairs(children) do
           local position = child:attributeValue("AXPosition")
@@ -122,6 +138,8 @@ function obj:probe()
               snap.chevronX = position.x
             elseif description == CHEVRON_EXPANDED then
               snap.expanded = true
+            elseif systemAgent and isPinned(child) then
+              snap.pinned = true
             else
               local entry = { key = string.format("%d:%d", app:pid(), index), x = position.x,
                               w = size and size.w or 0 }
