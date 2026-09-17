@@ -57,6 +57,8 @@ local CORRECTIVE = 60
 local SEARCH_TIMEOUT = 40
 --- 아이콘 높이. 메뉴바 항목의 표준 높이다
 local ICON_HEIGHT = 22
+--- 메뉴바 줄로 인정하는 y 범위. 이 밖의 항목은 시스템이 화면 밖에 치워 둔 것이다
+local MENUBAR_ROW_HEIGHT = 40
 
 --- 폭 w 의 거의 투명한 이미지. 알파 0 이면 항목이 그려지지 않으므로 0.001 을 쓴다.
 local function blankImage(w)
@@ -116,7 +118,9 @@ function obj:probe()
         for index, child in ipairs(children) do
           local position = child:attributeValue("AXPosition")
           local size = child:attributeValue("AXSize")
-          if position then
+          -- 메뉴바 줄 밖(y 가 메뉴바 높이를 넘는 것)에 있는 항목은 시스템이 치워 둔 것이다 — 배치에
+          -- 참여하지 않으므로 없는 것으로 본다. 세어 넣으면 접히지 않는 항목을 접으려 헛탐색한다.
+          if position and position.y >= 0 and position.y < MENUBAR_ROW_HEIGHT then
             local description = child:attributeValue("AXDescription")
             if description == CHEVRON_HIDDEN then
               snap.chevronX = position.x
