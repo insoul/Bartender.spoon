@@ -18,7 +18,7 @@ obj.__index = obj
 
 obj.name = "Bartender"
 obj.version = "1.0"
-obj.author = "buzz <buzz@watcha.com>"
+obj.author = "insoul <insoo.jung+github@gmail.com>"
 obj.license = "MIT - https://opensource.org/licenses/MIT"
 obj.homepage = "https://github.com/insoul/Bartender.spoon"
 
