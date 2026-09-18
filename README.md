@@ -27,7 +27,7 @@ hs.loadSpoon("Bartender"):start()
 2. **⌘ 을 누른 채 그 빈칸을 드래그**해서 원하는 자리에 놓는다.
    구분자 **왼쪽 = 접힘**, **오른쪽 = 표시**.
 3. 접힌 항목을 보려면 시스템 `«` 를 누른다.
-4. 구분자(빈칸)를 그냥 클릭하면 메뉴가 뜬다 — `다시 맞추기`, `배터리 표시 ▸`, 상태 한 줄.
+4. 구분자(빈칸)를 그냥 클릭하면 메뉴가 뜬다 — `다시 맞추기`, `설정…`, 상태 한 줄.
    iPhone 클립보드가 있으면 맨 위에 `📱 iPhone 클립보드 가져오기` 가 붙는다.
 
 구분자 자리는 `autosaveName` 으로 저장되므로 Hammerspoon 을 다시 켜도 유지된다.
@@ -72,13 +72,13 @@ spoon.Bartender:fetchHandoff() -- 메뉴 대신 코드로 가져오기
 
 ## 테스트
 
-폭 결정 로직(`lib/fit.lua`)과 시스템 항목 규칙(`lib/rules.lua`), 메뉴 구성(`lib/menu.lua`), iPhone 클립보드 판별(`lib/handoff.lua`)은 `hs.*` 를 쓰지 않는 순수 함수다. 판독 함수와 폭 설정 함수를
+폭 결정 로직(`lib/fit.lua`)과 시스템 항목 규칙(`lib/rules.lua`), 메뉴 구성(`lib/menu.lua`), 설정창 내용(`lib/settings.lua`), iPhone 클립보드 판별(`lib/handoff.lua`)은 `hs.*` 를 쓰지 않는 순수 함수다. 판독 함수와 폭 설정 함수를
 주입해 가짜 좌표 표로 검증한다. 독립 lua 인터프리터가 없으므로 Hammerspoon 의 Lua 로 돌린다:
 
 ```sh
 osascript -e 'tell application "Hammerspoon" to execute lua code
   "return dofile(\"/Users/insoul/.hammerspoon/Spoons/Bartender.spoon/tests/run.lua\")"'
-# => 204 passed, 0 failed
+# => 212 passed, 0 failed
 ```
 
 실패하면 `error` 로 올라오므로 osascript 가 0 이 아닌 상태로 끝난다.
@@ -93,7 +93,8 @@ osascript -e 'tell application "Hammerspoon" to execute lua code
   구분자 오른쪽에 놓고 폭을 되돌린다(1~2초 깜빡임). 항목이 이미 오른쪽에 있으면 폭을 건드리지 않는다.
   `start()` 때는 켜져 있는 항목도 모두 확인한다 — 리로드로 구분자를 다시 만들면 접혀 있을 수 있다.
 
-임계값은 구분자 메뉴 → `배터리 표시 ▸` 에서 고른다 (`배터리로 돌 때만` / 50 / 60 / 70 / 80 / 90% 이하).
+임계값은 구분자 메뉴 → `설정…` 창에서 바꾼다 — `배터리로 돌 때만`, 또는 `잔량이 N% 이하일 때`(1~100).
+바꾸는 즉시 반영되고 저장 버튼은 없다.
 고른 값은 `hs.settings` 에 남아 리로드 후에도 유지되고, 아래 기본값보다 우선한다.
 
 항목별로 끄거나 기본 임계값을 바꾸려면 `start()` 전에:
@@ -161,6 +162,7 @@ lib/handoff.lua iPhone 클립보드(핸드오프) 판별·정리 (순수 Lua)
 lib/place.lua   항목을 구분자 오른쪽으로 옮기는 드래그 계획 (순수 Lua)
 lib/rules.lua   배터리·Wi-Fi 스위치 규칙 (순수 Lua)
 lib/menu.lua    구분자 메뉴 구성 (순수 Lua)
+lib/settings.lua 설정창 HTML·메시지 해석 (순수 Lua)
 tests/          단위 테스트
 docs/design.md  설계와 실측 근거
 ```

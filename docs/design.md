@@ -203,16 +203,24 @@ Hammerspoon Spoon. 접힌 항목을 보는 것은 시스템 `«` 버튼이 담�
   그만 쓸 때는 `restoreExtras()` 로 모두 켠다.
 - 규칙 계산(`wanted`, `changes`, `toPlace`, 플래그 변환, 상태 판독)은 `lib/rules.lua` 의 순수 함수다.
 
-### 배터리 임계값 메뉴
+### 설정창 (`openSettings`)
 
-구분자 메뉴의 `배터리 표시 ▸` 서브메뉴에서 `배터리로 돌 때만 / 50 / 60 / 70 / 80 / 90% 이하` 를 고른다
-(`lib/menu.lua` 의 `THRESHOLDS`). 고르면 `setBatteryThreshold` 가 값을 바꾸고 `hs.settings`
-(`Bartender.batteryThreshold`) 에 저장한 뒤 바로 `applyExtras` 한다.
+구분자 메뉴의 `설정…` 이 `hs.webview` 창을 띄운다. 내용은 `lib/settings.lua` 의 `html(state)` 가 만들고,
+창 안의 JS 가 값이 바뀔 때마다 `window.webkit.messageHandlers.bartender.postMessage({ batteryThreshold })`
+로 보낸다(`hs.webview.usercontent`). `onSettingsMessage` 가 `settings.parse` 로 검증한 값만
+`setBatteryThreshold` 에 넘기고, 그것이 `hs.settings`(`Bartender.batteryThreshold`) 에 저장한 뒤 바로 `applyExtras` 한다.
+저장 버튼은 없다 — 시스템 설정처럼 즉시 반영한다.
 
-- 저장값은 `start()` 때 읽어 `obj.extras.batteryThreshold` 를 덮는다. init.lua 에 적은 값은 메뉴로 한 번도
-  바꾸지 않았을 때의 기본값이다 — 반대로 하면 리로드마다 메뉴 선택이 사라진다.
+- 항목: `배터리로 돌 때만`(nil) / `잔량이 N% 이하일 때`(1~100 정수). 범위 밖이거나 입력 중인 값은 JS 가 보내지 않고,
+  넘어와도 `parse` 가 거른다.
+- 저장값은 `start()` 때 읽어 `obj.extras.batteryThreshold` 를 덮는다. init.lua 에 적은 값은 설정창에서 한 번도
+  바꾸지 않았을 때의 기본값이다 — 반대로 하면 리로드마다 선택이 사라진다.
 - "배터리로 돌 때만"(nil)은 `false` 로 저장한다. `hs.settings.set(key, nil)` 은 키 삭제라 "고른 적 없음"과 구분되지 않는다.
-- 메뉴는 함수형(`setMenu(function)`)이라 열 때마다 현재 값에 체크가 붙는다.
+- 창 스타일에 `fullSizeContentView` 를 넣는다. 없으면 macOS 27 의 유리 타이틀바가 `hs.webview` 창의 clear 배경을
+  그대로 비춰 타이틀바가 투명하게 보인다(실측). 웹뷰는 그래도 타이틀바 아래에 놓이므로 페이지 여백은 그대로고,
+  창 높이에 타이틀바 33pt 가 포함된다.
+- 창은 하나만 둔다. 닫으면 `deleteOnClose` 로 사라지고 `windowCallback("closing")` 이 참조를 지운다 — 다시 열 때
+  지금 값으로 새로 그린다. `stop()` 이 떠 있는 창을 지운다.
 
 ### 저장소 (2026-09-16 실측, macOS 27.0 26A428)
 
@@ -297,7 +305,8 @@ Bartender.spoon/
   lib/fit.lua         폭 결정 로직 — hs.* 없는 순수 Lua (satisfied, signature, decide)
   lib/guard.lua       잠금·절전 판정 — hs.* 없는 순수 Lua
   lib/handoff.lua     iPhone 클립보드 판별·정리 — hs.* 없는 순수 Lua (MARKER, isRemote, strip)
-  lib/menu.lua        구분자 메뉴 구성 — hs.* 없는 순수 Lua (build, batterySubmenu, statusTitle, HANDOFF_TITLE)
+  lib/menu.lua        구분자 메뉴 구성 — hs.* 없는 순수 Lua (build, statusTitle, HANDOFF_TITLE)
+  lib/settings.lua    설정창 HTML 과 메시지 해석 — hs.* 없는 순수 Lua (html, parse, HANDLER)
   lib/place.lua       옮기기 드래그 계획·판정 — hs.* 없는 순수 Lua (dragToRightOf, isRightOf)
   lib/rules.lua       시스템 항목 규칙 — hs.* 없는 순수 Lua (wanted, changes, toPlace, 플래그 변환, 상태 판독)
   tests/run.lua       단위 테스트

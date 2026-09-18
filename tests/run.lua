@@ -3,12 +3,13 @@
 ---   osascript -e 'tell application "Hammerspoon" to execute lua code
 ---     "return dofile(\"<spoon>/tests/run.lua\")"'
 --- 통과하면 요약 문자열을 돌려주고, 하나라도 실패하면 error 로 올린다.
---- 이 파일과 fake_bar, lib/fit, lib/place, lib/rules, lib/handoff 는 hs.* 를 쓰지 않는다.
+--- 이 파일과 fake_bar, lib/fit, lib/place, lib/rules, lib/handoff, lib/settings 는 hs.* 를 쓰지 않는다.
 
 local here = debug.getinfo(1, "S").source:match("^@(.*[/\\])") or "./"
 local fit = dofile(here .. "../lib/fit.lua")
 local guard = dofile(here .. "../lib/guard.lua")
 local handoff = dofile(here .. "../lib/handoff.lua")
+local settings = dofile(here .. "../lib/settings.lua")
 local menuBuilder = dofile(here .. "../lib/menu.lua")
 local place = dofile(here .. "../lib/place.lua")
 local rules = dofile(here .. "../lib/rules.lua")
@@ -363,48 +364,29 @@ end
 -- 17. 구분자 메뉴 구성
 --------------------------------------------------------------------------
 do
-  local fired, chosen = false, "안 불림"
+  local fired, opened = false, false
   local actions = {
     fit = function() fired = true end,
-    setBatteryThreshold = function(t) chosen = t end,
+    openSettings = function() opened = true end,
   }
 
-  local normal = menuBuilder.build({ width = 144, hidden = 9, battery = true, batteryThreshold = 80 }, actions)
+  local normal = menuBuilder.build({ width = 144, hidden = 9 }, actions)
   eq("메뉴: 항목 네 개", #normal, 4)
   eq("메뉴: 첫 항목은 다시 맞추기", normal[1].title, "다시 맞추기")
   check("메뉴: 다시 맞추기에 동작이 달려 있다", type(normal[1].fn) == "function")
-  eq("메뉴: 둘째는 배터리 표시 서브메뉴", normal[2].title, "배터리 표시")
+  eq("메뉴: 둘째는 설정…", normal[2].title, "설정…")
   eq("메뉴: 셋째는 구분선", normal[3].title, "-")
   eq("메뉴: 정상 상태 표시", normal[4].title, "폭 144 · 접힘 9개")
   check("메뉴: 상태 표시는 누를 수 없다", normal[4].disabled == true)
   normal[1].fn()
   check("메뉴: 다시 맞추기가 넘겨받은 동작을 부른다", fired)
-
-  local sub = normal[2].menu
-  eq("서브메뉴: 배터리로 돌 때만 + 임계값 다섯", #sub, 1 + #menuBuilder.THRESHOLDS)
-  eq("서브메뉴: 첫 항목", sub[1].title, "배터리로 돌 때만")
-  eq("서브메뉴: 임계값 항목 제목", sub[2].title, "50% 이하")
-  eq("서브메뉴: 마지막 임계값", sub[#sub].title, "90% 이하")
-  local checkedTitles = {}
-  for _, item in ipairs(sub) do if item.checked then checkedTitles[#checkedTitles + 1] = item.title end end
-  eq("서브메뉴: 현재 값 하나에만 체크", table.concat(checkedTitles, ","), "80% 이하")
-  sub[1].fn()
-  eq("서브메뉴: 배터리로 돌 때만 → nil 을 넘긴다", chosen, nil)
-  sub[3].fn()
-  eq("서브메뉴: 60% 이하 → 60 을 넘긴다", chosen, 60)
-
-  local none = menuBuilder.build({ width = 144, hidden = 0, battery = true, batteryThreshold = nil }, actions)
-  check("서브메뉴: 임계값 없음이면 첫 항목에 체크", none[2].menu[1].checked == true)
-  check("서브메뉴: 임계값 없음이면 나머지는 체크 없음", not none[2].menu[2].checked)
-
-  local off = menuBuilder.build({ width = 144, hidden = 0, battery = false }, actions)
-  eq("메뉴: 배터리 규칙을 껐으면 서브메뉴가 없다", #off, 3)
-  eq("메뉴: 배터리 규칙을 껐을 때 둘째는 구분선", off[2].title, "-")
+  normal[2].fn()
+  check("메뉴: 설정… 이 설정창 열기를 부른다", opened)
 
   eq("메뉴: 펼침 상태 표시",
-     menuBuilder.build({ width = 144, hidden = 0, expanded = true }, actions)[3].title, "펼침 상태")
+     menuBuilder.build({ width = 144, hidden = 0, expanded = true }, actions)[4].title, "펼침 상태")
   eq("메뉴: 잠금·절전 표시",
-     menuBuilder.build({ width = 144, suspended = true }, actions)[3].title, "잠금·절전 중")
+     menuBuilder.build({ width = 144, suspended = true }, actions)[4].title, "잠금·절전 중")
   eq("메뉴: 중단이 펼침보다 앞선다",
      menuBuilder.statusTitle({ suspended = true, expanded = true }), "잠금·절전 중")
   eq("메뉴: 폭이 소수여도 적는다", menuBuilder.statusTitle({ width = 144.0, hidden = 2 }),
@@ -778,6 +760,38 @@ do
   local without = menuBuilder.build(base, actions)
   eq("핸드오프 없음: 평소 메뉴 그대로", #without, 4)
   eq("핸드오프 없음: 첫 항목은 다시 맞추기", without[1].title, "다시 맞추기")
+end
+
+--------------------------------------------------------------------------
+-- 34. 설정창 — HTML 렌더와 메시지 해석
+--------------------------------------------------------------------------
+do
+  local html = settings.html({ batteryThreshold = 80 })
+  check("설정 HTML: 제목", html:find("Bartender 설정", 1, true) ~= nil)
+  check("설정 HTML: 임계값 라디오에 체크", html:find('id="mode%-threshold"[^>]*checked', 1) ~= nil)
+  check("설정 HTML: 배터리로 돌 때만 라디오는 체크 없음", html:find('id="mode%-onbattery"[^>]*checked', 1) == nil)
+  check("설정 HTML: 입력값 80", html:find('id="threshold"[^>]*value="80"', 1) ~= nil)
+  check("설정 HTML: 메시지 핸들러 이름", html:find("messageHandlers." .. settings.HANDLER, 1, true) ~= nil)
+
+  local none = settings.html({ batteryThreshold = nil })
+  check("설정 HTML: 임계값 없음이면 배터리로 돌 때만에 체크", none:find('id="mode%-onbattery"[^>]*checked', 1) ~= nil)
+  check("설정 HTML: 임계값 없음이면 임계값 라디오는 체크 없음", none:find('id="mode%-threshold"[^>]*checked', 1) == nil)
+  check("설정 HTML: 임계값 없음이면 입력값은 기본 80", none:find('id="threshold"[^>]*value="80"', 1) ~= nil)
+
+  local ok, t = settings.parse({ batteryThreshold = 70 })
+  check("메시지: 숫자", ok and t == 70, tostring(t))
+  ok, t = settings.parse({ batteryThreshold = "65" })
+  check("메시지: 숫자 문자열도 받는다", ok and t == 65, tostring(t))
+  ok, t = settings.parse({ batteryThreshold = 72.9 })
+  check("메시지: 소수는 내림", ok and t == 72, tostring(t))
+  ok, t = settings.parse({ batteryThreshold = false })
+  check("메시지: false 는 배터리로 돌 때만(nil)", ok and t == nil, tostring(t))
+  check("메시지: 0 은 거부", not settings.parse({ batteryThreshold = 0 }))
+  check("메시지: 101 은 거부", not settings.parse({ batteryThreshold = 101 }))
+  check("메시지: 숫자 아닌 문자열은 거부", not settings.parse({ batteryThreshold = "abc" }))
+  check("메시지: 키가 없으면 거부", not settings.parse({}))
+  check("메시지: 테이블이 아니면 거부", not settings.parse("x"))
+  check("메시지: nil 이면 거부", not settings.parse(nil))
 end
 
 --------------------------------------------------------------------------

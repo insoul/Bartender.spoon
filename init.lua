@@ -26,6 +26,7 @@ local spoonPath = debug.getinfo(1, "S").source:match("^@(.*[/\\])") or "./"
 local fit = dofile(spoonPath .. "lib/fit.lua")
 local guard = dofile(spoonPath .. "lib/guard.lua")
 local handoff = dofile(spoonPath .. "lib/handoff.lua")
+local settings = dofile(spoonPath .. "lib/settings.lua")
 local menu = dofile(spoonPath .. "lib/menu.lua")
 local place = dofile(spoonPath .. "lib/place.lua")
 local rules = dofile(spoonPath .. "lib/rules.lua")
@@ -35,7 +36,7 @@ local rules = dofile(spoonPath .. "lib/rules.lua")
 ---             batteryThreshold 가 nil 이면 배터리로 돌 때만이다.
 ---   WiFi    — 연결이 끊겼을 때만 보인다.
 --- 이 스위치는 Spoon 이 소유한다 — 시스템 설정에서 손으로 바꿔도 다음 상태 변화 때 규칙대로 되돌아간다.
---- batteryThreshold 는 구분자 메뉴의 "배터리 표시"로도 바꿀 수 있고, 그 값은 hs.settings 에 남아 start() 때
+--- batteryThreshold 는 구분자 메뉴 → 설정… 창에서도 바꿀 수 있고, 그 값은 hs.settings 에 남아 start() 때
 --- 여기 적은 기본값을 덮는다. 메뉴로 한 번도 바꾸지 않았을 때만 이 값이 쓰인다.
 obj.extras = { Battery = true, WiFi = true, batteryThreshold = 80 }
 
@@ -47,8 +48,10 @@ local SEP_AUTOSAVE = "bartender_sep"
 --- 시스템 항목 스위치가 저장되는 defaults 도메인. per-host(-currentHost) 이고 키는 항목 이름(Battery, WiFi),
 --- 값은 정수 플래그(lib/rules.lua 의 FLAG_*)다.
 local CC_DOMAIN = "com.apple.controlcenter"
---- 메뉴로 고른 배터리 임계값을 저장하는 hs.settings 키. "배터리로 돌 때만"은 false 로 저장한다 — nil 은 키 삭제라 구분이 안 된다
+--- 설정창에서 고른 배터리 임계값을 저장하는 hs.settings 키. "배터리로 돌 때만"은 false 로 저장한다 — nil 은 키 삭제라 구분이 안 된다
 local SETTINGS_THRESHOLD = "Bartender.batteryThreshold"
+--- 설정창 크기(pt). 주 화면 가운데 위쪽에 띄운다. fullSizeContentView 라 높이에 타이틀바(33pt)가 들어간다
+local SETTINGS_WINDOW = { w = 440, h = 214 }
 
 --- MenuBarAgent 의 오버플로 버튼 하나가 설명 문자열로 상태를 알린다.
 --- 접힌 항목이 있으면 « / "Show Hidden…", 없으면 » / "Hide Menu Bar Items".
@@ -224,8 +227,6 @@ function obj:menuItems()
   local state = {
     suspended = guard.isSuspended(self.suspended, focusedAppName()),
     width = self.width,
-    battery = self.extras.Battery,
-    batteryThreshold = self.extras.batteryThreshold,
     handoff = self.handoff,
   }
   if not state.suspended then
@@ -244,9 +245,54 @@ function obj:menuItems()
       self.failSignature = nil
       self:fit()
     end,
-    setBatteryThreshold = function(t) self:setBatteryThreshold(t) end,
+    openSettings = function() self:openSettings() end,
     fetchHandoff = function() self:fetchHandoff() end,
   })
+end
+
+--------------------------------------------------------------------------
+-- 설정창
+--------------------------------------------------------------------------
+
+--- 설정창을 띄운다. 이미 떠 있으면 앞으로 가져온다. 값은 바꾸는 즉시 반영·저장한다 (저장 버튼 없음).
+--- 창을 닫으면 webview 는 사라진다(deleteOnClose) — 다음에 열 때 지금 값으로 다시 그린다.
+function obj:openSettings()
+  if self.settingsView then
+    self.settingsView:show():bringToFront()
+    return self
+  end
+  local controller = hs.webview.usercontent.new(settings.HANDLER)
+  controller:setCallback(function(message) self:onSettingsMessage(message and message.body) end)
+  local screen = hs.screen.mainScreen():frame()
+  local w, h = SETTINGS_WINDOW.w, SETTINGS_WINDOW.h
+  local view = hs.webview.new({ x = screen.x + (screen.w - w) / 2, y = screen.y + (screen.h - h) / 3, w = w, h = h },
+                              {}, controller)
+  view:windowTitle("Bartender 설정")
+  -- fullSizeContentView 가 없으면 macOS 27 의 유리 타이틀바가 창 배경(clear)을 그대로 비춰 투명하게 보인다.
+  -- 콘텐츠를 창 전체로 깔면 타이틀바 뒤가 채워진다. 웹뷰 자체는 여전히 타이틀바 아래에 놓인다
+  view:windowStyle({ "titled", "closable", "fullSizeContentView" })
+  view:allowTextEntry(true)
+  view:closeOnEscape(true)
+  view:deleteOnClose(true)
+  view:windowCallback(function(action)
+    if action == "closing" then self.settingsView = nil end
+  end)
+  view:html(settings.html({ batteryThreshold = self.extras.batteryThreshold }))
+  view:show():bringToFront()
+  self.settingsView = view
+  return self
+end
+
+--- 설정창에서 올라온 메시지. 형식이 맞는 값만 반영한다.
+--- @param body any postMessage 본문
+function obj:onSettingsMessage(body)
+  local ok, threshold = settings.parse(body)
+  if not ok then
+    self:log("설정창 메시지를 해석하지 못함: %s", hs.inspect(body))
+    return self
+  end
+  if threshold ~= self.extras.batteryThreshold then self:setBatteryThreshold(threshold) end
+  return self
 end
 
 --------------------------------------------------------------------------
@@ -600,7 +646,7 @@ function obj:applyExtras(opts)
   return self
 end
 
---- 배터리 임계값을 바꾸고 저장한 뒤 바로 반영한다. 구분자 메뉴의 "배터리 표시"가 부른다.
+--- 배터리 임계값을 바꾸고 저장한 뒤 바로 반영한다. 설정창이 부른다.
 --- @param threshold number|nil nil 이면 배터리로 돌 때만 보인다
 function obj:setBatteryThreshold(threshold)
   self.extras.batteryThreshold = threshold
@@ -676,6 +722,7 @@ function obj:init()
   self.placeSaved = 0
   self.placeTouched = false
   self.handoff = false
+  self.settingsView = nil
   return self
 end
 
@@ -760,6 +807,7 @@ function obj:stop()
   if self.screenWatcher then self.screenWatcher:stop(); self.screenWatcher = nil end
   if self.appWatcher then self.appWatcher:stop(); self.appWatcher = nil end
   if self.powerWatcher then self.powerWatcher:stop(); self.powerWatcher = nil end
+  if self.settingsView then self.settingsView:delete(); self.settingsView = nil end
   if self.sep then self.sep:delete(); self.sep = nil end
   return self
 end
