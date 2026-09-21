@@ -738,6 +738,53 @@ do
 end
 
 --------------------------------------------------------------------------
+-- 35b. 핸드오프: 참조만 온 항목은 file-url 의 파일을 읽어 콘텐츠 타입으로 채운다
+--------------------------------------------------------------------------
+do
+  local ITEMS = "file:///Users/me/Library/Group%20Containers/group.com.apple.coreservices.useractivityd/shared-pasteboard/items/384741C3/IMG_1254.jpeg"
+  local files = { ["/Users/me/Library/Group Containers/group.com.apple.coreservices.useractivityd/shared-pasteboard/items/384741C3/IMG_1254.jpeg"] = "JPEGBYTES" }
+  local function readFile(path) return files[path] end
+
+  -- (a) 사진 앱 복사: file-url + 사진 라이브러리 ID 만 온다. 파일을 읽어 public.jpeg 를 채우고 ID 는 버린다
+  local src = { ["public.file-url"] = ITEMS, ["com.apple.mobileslideshow.asset.localidentifier"] = "A96/L0/001",
+                ["com.apple.is-remote-clipboard"] = "" }
+  local got = handoff.strip(src, readFile)
+  check("사진 복사: 결과가 있다", got ~= nil)
+  eq("사진 복사: file-url 의 파일이 public.jpeg 로 실린다", got and got["public.jpeg"], "JPEGBYTES")
+  eq("사진 복사: 곧 지워질 file-url 은 뺀다", got and got["public.file-url"], nil)
+  eq("사진 복사: 사진 라이브러리 ID 는 버린다", got and got["com.apple.mobileslideshow.asset.localidentifier"], nil)
+  eq("사진 복사: 마커는 빠진다", got and got["com.apple.is-remote-clipboard"], nil)
+
+  -- (b) 확장자별 UTI
+  eq("UTI: png", handoff.utiForPath("/a/b/IMG.PNG"), "public.png")
+  eq("UTI: jpg", handoff.utiForPath("/a/b/x.jpg"), "public.jpeg")
+  eq("UTI: heic", handoff.utiForPath("/a/b/x.heic"), "public.heic")
+  eq("UTI: gif", handoff.utiForPath("/a/b/x.gif"), "com.compuserve.gif")
+  eq("UTI: mov", handoff.utiForPath("/a/b/x.mov"), "com.apple.quicktime-movie")
+  eq("UTI: mp4", handoff.utiForPath("/a/b/x.mp4"), "public.mpeg-4")
+  eq("UTI: pdf", handoff.utiForPath("/a/b/x.pdf"), "com.adobe.pdf")
+  eq("UTI: 모르는 확장자는 nil", handoff.utiForPath("/a/b/x.xyz"), nil)
+  eq("UTI: 확장자 없음", handoff.utiForPath("/a/b/noext"), nil)
+
+  -- (c) 파일을 못 읽으면(만료·삭제) 참조뿐이라 가져올 것이 없다
+  eq("파일 없음: nil", handoff.strip(src, function() return nil end), nil)
+  -- (d) 콘텐츠 타입이 하나도 없으면 실패 — 참조 ID 만으로 성공 처리하지 않는다
+  eq("ID 만 있으면 nil", handoff.strip({ ["com.apple.mobileslideshow.asset.localidentifier"] = "A" }, readFile), nil)
+  -- (e) 이미지 바이트가 이미 있으면 파일을 읽지 않는다
+  local direct = handoff.strip({ ["public.png"] = "PNG", ["public.file-url"] = ITEMS }, function() error("읽으면 안 된다") end)
+  eq("바이트가 있으면 그대로", direct["public.png"], "PNG")
+  eq("바이트가 있으면 file-url 도 그대로", direct["public.file-url"], ITEMS)
+  -- (f) iPhone 내부 경로 같은 로컬이 아닌 URL 은 읽지 않는다
+  eq("file 스킴이 아니면 nil", handoff.strip({ ["public.file-url"] = "https://x/y.png" }, readFile), nil)
+  -- (g) 경로의 퍼센트 인코딩을 푼다
+  local seen
+  handoff.strip({ ["public.file-url"] = "file:///tmp/a%20b/c.png" }, function(path) seen = path; return "P" end)
+  eq("퍼센트 디코딩", seen, "/tmp/a b/c.png")
+  -- (h) readFile 없이 부르면 예전처럼 마커·빈 데이터만 뺀다 (텍스트 복사)
+  eq("readFile 없음: 텍스트", handoff.strip({ ["public.utf8-plain-text"] = "글", ["com.apple.is-remote-clipboard"] = "" })["public.utf8-plain-text"], "글")
+end
+
+--------------------------------------------------------------------------
 -- 36. 구분자 메뉴: 핸드오프가 있을 때만 가져오기 항목이 맨 위에 붙는다
 --------------------------------------------------------------------------
 do
@@ -763,7 +810,7 @@ do
 end
 
 --------------------------------------------------------------------------
--- 34. 설정창 — HTML 렌더와 메시지 해석
+-- 37. 설정창 — HTML 렌더와 메시지 해석
 --------------------------------------------------------------------------
 do
   local html = settings.html({ batteryThreshold = 80 })

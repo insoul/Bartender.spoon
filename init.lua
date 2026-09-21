@@ -684,15 +684,50 @@ function obj:checkHandoff()
   if self.width < BADGE_WIDTH then self:schedule() end
 end
 
+--- file-url 이 가리키는 로컬 파일을 통째로 읽는다. 없거나 못 읽으면 nil 과 오류 문자열.
+--- 파일은 useractivityd 의 Group Container 아래에 있어 TCC 가 막는다 — Hammerspoon 에 "전체 디스크 접근"
+--- 이 없으면 "Operation not permitted" 로 실패한다.
+local function readFile(path)
+  local f, err = io.open(path, "rb")
+  if not f then return nil, err end
+  local bytes = f:read("a")
+  f:close()
+  return bytes
+end
+
+--- 첫 읽기가 iPhone 에서 전송을 촉발하는데, 전송이 도는 동안 pboard 는 모든 타입을 빈 데이터로 돌려준다.
+--- 전송이 끝나면 마커는 그대로 둔 채 데이터가 채워지므로, 마커가 남아 있는 한 이 간격으로 다시 읽는다.
+local FETCH_RETRY_STEP = 0.3
+local FETCH_RETRIES = 10
+
 --- iPhone 항목을 실제로 받아(이때 시스템 진행창이 뜰 수 있다) 마커 없는 로컬 항목으로 다시 쓴다.
 --- changeCount 가 바뀌므로 클립보드 매니저가 저장하고, 마커가 사라져 배지가 내려간다.
-function obj:fetchHandoff()
-  local data = handoff.strip(hs.pasteboard.readAllData())
+--- 사진 앱에서 복사한 이미지는 바이트 대신 file-url 로 오므로, 시스템이 옮겨 둔 파일을 읽어 이미지 타입으로 싣는다.
+--- @param attempt number|nil 재시도 회차. 메뉴에서 부를 때는 비운다
+function obj:fetchHandoff(attempt)
+  attempt = attempt or 1
+  local data = handoff.strip(hs.pasteboard.readAllData(), readFile)
   if not data then
-    self:log("핸드오프 가져오기: 받은 데이터가 없다 (만료?)")
+    -- 마커가 남아 있으면 전송이 막 끝났거나 아직 도는 중이다. 마커가 사라졌으면 전송 실패(타임아웃·만료)다
+    if attempt < FETCH_RETRIES and handoff.isRemote(hs.pasteboard.allContentTypes()) then
+      self.fetchTimer = hs.timer.doAfter(FETCH_RETRY_STEP, function()
+        self.fetchTimer = nil
+        self:fetchHandoff(attempt + 1)
+      end)
+      return
+    end
+    local raw = hs.pasteboard.readAllData() or {}
+    local _, err = raw["public.file-url"] and readFile(handoff.localPath(raw["public.file-url"]) or "")
+    if err and err:find("not permitted") then
+      self:log("핸드오프 가져오기: 파일을 못 읽는다 — %s", err)
+      hs.alert.show("Hammerspoon 에 전체 디스크 접근 권한이 필요하다 (iPhone 사진 파일)")
+      return
+    end
+    self:log("핸드오프 가져오기: 받은 데이터가 없다 (%d회 읽음, 만료 또는 전송 실패)", attempt)
     hs.alert.show("가져올 iPhone 클립보드가 없다")
     return
   end
+  if attempt > 1 then self:log("핸드오프: %d회째 읽기에서 데이터가 왔다", attempt) end
   local before = hs.pasteboard.changeCount()
   local ok = hs.pasteboard.writeAllData(data)
   local kinds = {}
@@ -801,6 +836,7 @@ function obj:stop()
   -- 타이머는 참조를 잃으면 GC 로 사라지므로 전부 self 에 붙들어 두고 여기서 거둔다
   if self.correctiveTimer then self.correctiveTimer:stop(); self.correctiveTimer = nil end
   if self.handoffTimer then self.handoffTimer:stop(); self.handoffTimer = nil end
+  if self.fetchTimer then self.fetchTimer:stop(); self.fetchTimer = nil end
   self.handoff = false
   if self.batteryWatcher then self.batteryWatcher:stop(); self.batteryWatcher = nil end
   if self.wifiWatcher then self.wifiWatcher:stop(); self.wifiWatcher = nil end
