@@ -86,6 +86,15 @@ local BADGE_WIDTH = 16
 local HANDOFF_POLL = 0.5
 --- 메뉴바 줄로 인정하는 y 범위. 이 밖의 항목은 시스템이 화면 밖에 치워 둔 것이다
 local MENUBAR_ROW_HEIGHT = 40
+--- AX 요청에 답하지 않는 프로세스를 이 시간(초) 뒤에 포기한다. 시스템 기본은 1.5초라 응답 없는
+--- 프로세스 하나가 판독 한 번을 그만큼 막고, 판독은 폭을 바꿀 때마다 100ms 간격으로 되풀이된다.
+local AX_TIMEOUT = 0.2
+--- 타임아웃한 프로세스는 이 시간(초) 동안 다시 묻지 않는다. 응답 없는 프로세스가 판독마다 AX_TIMEOUT 씩
+--- 쌓이면 탐색 한 걸음이 초 단위가 된다. 지나면 한 번 다시 물어 회복한 앱을 다시 넣는다.
+local AX_SKIP_FOR = 60
+--- 메뉴바 항목을 가질 수 없는데 AX 요청에 답하지 않는 프로세스의 번들 ID 접두어. WebKit 의 콘텐츠·네트워크·GPU
+--- XPC 헬퍼가 그렇다 — Safari 탭마다 하나씩 떠서 타임아웃이 탭 수만큼 쌓인다.
+local AX_SKIP_BUNDLE_PREFIX = "com.apple.WebKit."
 
 --- 시스템이 자리를 고정하는 MenuBarAgent 항목. 접히지 않고 ⌘+드래그로도 옮겨지지 않는다
 --- (macOS 27.0 실측). 떠 있는 동안 시스템이 구분자를 접어 자리를 내고 사라지면 배치를 스스로
@@ -164,39 +173,65 @@ local function isPinned(child)
   return false
 end
 
+--- pid → 이 시각까지 AX 요청을 건너뛴다. AX_TIMEOUT 을 다 쓴 프로세스가 들어온다.
+local axSkipUntil = {}
+
+--- 메뉴바 항목을 가질 수 있는 실행 중 앱의 AXExtrasMenuBar 를 모은다.
+--- WebKit 헬퍼는 묻지 않고, 나머지는 AX_TIMEOUT 안에 답해야 한다. 타임아웃한 프로세스는 AX_SKIP_FOR 동안
+--- 건너뛴다. hs.application:path() 는 번들 없는 프로세스에서 예외를 던지므로 판별에 쓰지 않는다.
+--- @return table { {app = hs.application, extras = hs.axuielement}, ... }
+local function menuExtras()
+  local list = {}
+  local now = hs.timer.secondsSinceEpoch()
+  for _, app in ipairs(hs.application.runningApplications()) do
+    local pid = app:pid()
+    local bundleID = app:bundleID() or ""
+    if bundleID:sub(1, #AX_SKIP_BUNDLE_PREFIX) ~= AX_SKIP_BUNDLE_PREFIX and (axSkipUntil[pid] or 0) <= now then
+      local ok, element = pcall(hs.axuielement.applicationElement, app)
+      if ok and element then
+        element:setTimeout(AX_TIMEOUT)
+        local asked = hs.timer.secondsSinceEpoch()
+        local extras = element:attributeValue("AXExtrasMenuBar")
+        -- 타임아웃으로 끝난 요청은 AX_TIMEOUT 보다 조금 일찍 돌아오기도 한다. 90% 를 넘겼으면 같은 것으로 본다
+        if hs.timer.secondsSinceEpoch() - asked >= AX_TIMEOUT * 0.9 then
+          axSkipUntil[pid] = now + AX_SKIP_FOR
+        elseif extras then
+          list[#list + 1] = { app = app, extras = extras }
+        end
+      end
+    end
+  end
+  return list
+end
+
 --- 모든 실행 중 앱의 AXExtrasMenuBar 자식을 모아 fit.decide 가 쓰는 스냅샷으로 만든다.
 --- key 는 pid 와 앱 안에서의 순서로 만든다 — 제목은 시계처럼 매 초 바뀌는 것이 있어 못 쓴다.
 function obj:probe()
   local snap = { items = {}, chevronX = nil, expanded = false, sep = nil, pinned = false }
-  for _, app in ipairs(hs.application.runningApplications()) do
-    local ok, element = pcall(hs.axuielement.applicationElement, app)
-    if ok and element then
-      local extras = element:attributeValue("AXExtrasMenuBar")
-      if extras then
-        local systemAgent = app:name() == "MenuBarAgent"
-        local children = extras:attributeValue("AXChildren") or {}
-        for index, child in ipairs(children) do
-          local position = child:attributeValue("AXPosition")
-          local size = child:attributeValue("AXSize")
-          -- 메뉴바 줄 밖(y 가 메뉴바 높이를 넘는 것)에 있는 항목은 시스템이 치워 둔 것이다 — 배치에
-          -- 참여하지 않으므로 없는 것으로 본다. 세어 넣으면 접히지 않는 항목을 접으려 헛탐색한다.
-          if position and position.y >= 0 and position.y < MENUBAR_ROW_HEIGHT then
-            local description = child:attributeValue("AXDescription")
-            if description == CHEVRON_HIDDEN then
-              snap.chevronX = position.x
-            elseif description == CHEVRON_EXPANDED then
-              snap.expanded = true
-            elseif systemAgent and isPinned(child) then
-              snap.pinned = true
-            else
-              local entry = { key = string.format("%d:%d", app:pid(), index), x = position.x,
-                              w = size and size.w or 0 }
-              if child:attributeValue("AXHelp") == SEP_TOOLTIP then
-                snap.sep = entry
-              else
-                snap.items[#snap.items + 1] = entry
-              end
-            end
+  for _, owner in ipairs(menuExtras()) do
+    local app = owner.app
+    local systemAgent = app:name() == "MenuBarAgent"
+    local children = owner.extras:attributeValue("AXChildren") or {}
+    for index, child in ipairs(children) do
+      local position = child:attributeValue("AXPosition")
+      local size = child:attributeValue("AXSize")
+      -- 메뉴바 줄 밖(y 가 메뉴바 높이를 넘는 것)에 있는 항목은 시스템이 치워 둔 것이다 — 배치에
+      -- 참여하지 않으므로 없는 것으로 본다. 세어 넣으면 접히지 않는 항목을 접으려 헛탐색한다.
+      if position and position.y >= 0 and position.y < MENUBAR_ROW_HEIGHT then
+        local description = child:attributeValue("AXDescription")
+        if description == CHEVRON_HIDDEN then
+          snap.chevronX = position.x
+        elseif description == CHEVRON_EXPANDED then
+          snap.expanded = true
+        elseif systemAgent and isPinned(child) then
+          snap.pinned = true
+        else
+          local entry = { key = string.format("%d:%d", app:pid(), index), x = position.x,
+                          w = size and size.w or 0 }
+          if child:attributeValue("AXHelp") == SEP_TOOLTIP then
+            snap.sep = entry
+          else
+            snap.items[#snap.items + 1] = entry
           end
         end
       end
