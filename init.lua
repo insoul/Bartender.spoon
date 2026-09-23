@@ -403,18 +403,19 @@ function obj:fit()
   end
 
   local co = coroutine.create(function()
-    local ok, result, failSignature = pcall(function()
+    local ok, result, failSignature, leftKeys = pcall(function()
       local keyset = fit.keyset(self:probe())
-      local width, failSig = fit.decide(apply, function() return self:probe() end, {
+      local width, failSig, left = fit.decide(apply, function() return self:probe() end, {
         maxWidth = searchLimit(),
         currentWidth = self.width,
         lastFailSig = self.failSignature,
         hint = keyset and self.widthCache[keyset] or nil,
+        leftKeys = self.leftKeys,
         log = function(fmt, ...) self:log(fmt, ...) end,
       })
       -- 성공한 폭을 항목 구성별로 기억한다. 같은 구성이 돌아오면 탐색 없이 한 걸음에 맞춘다.
       if keyset and width > 0 and failSig == nil then self.widthCache[keyset] = width end
-      return width, failSig
+      return width, failSig, left
     end)
 
     -- 세대가 바뀌었으면 이 탐색은 이미 주인이 아니다. 상태를 건드리지 않고 사라진다.
@@ -426,6 +427,8 @@ function obj:fit()
       self.lastWidth = result
       -- 실패한 배치의 서명을 들고 있다가 다음 호출에 돌려준다. 성공하면 nil 이 되어 기억이 지워진다.
       self.failSignature = failSignature
+      -- 구분자가 보였을 때의 왼쪽 항목 목록. 앱 전환으로 구분자가 접혔을 때 만족 판정에 쓴다.
+      self.leftKeys = leftKeys
     elseif result ~= ABORTED then
       hs.printf("[Bartender] 탐색 실패: %s", tostring(result))
     end
@@ -786,6 +789,7 @@ function obj:init()
   self.widthCache = {}
   self.lastLog = nil
   self.failSignature = nil
+  self.leftKeys = nil
   self.suspended = false
   self.placing = false
   self.placeQueue = {}

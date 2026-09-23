@@ -842,6 +842,72 @@ do
 end
 
 --------------------------------------------------------------------------
+-- 38. 앱 전환으로 예산이 줄어 구분자가 접혀도, 왼쪽 항목이 안 보이면 만족이다
+--------------------------------------------------------------------------
+do
+  -- 구분자가 보일 때: 왼쪽 항목 목록을 알려 준다
+  local setWidth, probe, trace = fakeBar.new({
+    order = { "H", "A", "B", "SEP", "R" },
+    hiddenFor = function() return { "H", "A", "B" } end,
+    width = 147,
+  })
+  local w, sig, leftKeys = fit.decide(setWidth, probe, { currentWidth = 147 })
+  eq("구분자 보임: 만족, 폭 그대로", w, 147)
+  eq("구분자 보임: setWidth 안 부름", #trace, 0)
+  table.sort(leftKeys or {})
+  eq("구분자 보임: 왼쪽 항목 목록을 돌려준다", table.concat(leftKeys or {}, ","), "A,B,H")
+
+  -- Xcode 앞: 시스템이 구분자까지 접었다. 왼쪽은 여전히 접힌 채 → 손대지 않는다
+  local setWidth2, probe2, trace2 = fakeBar.new({
+    order = { "H", "A", "B", "SEP", "R" },
+    hiddenFor = function() return { "H", "A", "B", "SEP" } end,
+    width = 147,
+  })
+  local w2, sig2, left2 = fit.decide(setWidth2, probe2, { currentWidth = 147, leftKeys = { "H", "A", "B" } })
+  eq("구분자 접힘·왼쪽 접힘: 폭 그대로", w2, 147)
+  eq("구분자 접힘·왼쪽 접힘: setWidth 안 부름 (폭 0 으로 내리지 않는다)", #trace2, 0)
+  eq("구분자 접힘·왼쪽 접힘: 실패 서명 없음", sig2, nil)
+  table.sort(left2 or {})
+  eq("구분자 접힘: 기억한 왼쪽 목록을 그대로 돌려준다", table.concat(left2 or {}, ","), "A,B,H")
+
+  -- 구분자가 너무 넓어 혼자 빠지고 왼쪽 항목이 되살아난 경우 → 불만족, 다시 잰다
+  local setWidth3, probe3, trace3 = fakeBar.new({
+    order = { "H", "A", "B", "SEP", "R" },
+    hiddenFor = thresholds({
+      { from = 300, hidden = { "H", "SEP" } },       -- 넓으면 구분자만 빠지고 A·B 가 돌아온다
+      { from = 100, hidden = { "H", "A", "B" } },
+    }),
+    width = 400,
+  })
+  local w3 = fit.decide(setWidth3, probe3, { currentWidth = 400, leftKeys = { "H", "A", "B" } })
+  check("구분자 접힘·왼쪽 노출: 다시 재서 [100,300) 을 고른다", w3 >= 100 and w3 < 300, "폭 " .. tostring(w3))
+  check("구분자 접힘·왼쪽 노출: setWidth 를 불렀다", #trace3 > 0)
+
+  -- 왼쪽 목록을 모르면(시작 직후) 예전처럼 잰다
+  local setWidth4, probe4, trace4 = fakeBar.new({
+    order = { "H", "A", "SEP", "R" },
+    hiddenFor = thresholds({
+      { from = 300, hidden = { "H", "A", "SEP" } },
+      { from = 100, hidden = { "H", "A" } },
+    }),
+    width = 400,
+  })
+  local w4 = fit.decide(setWidth4, probe4, { currentWidth = 400 })
+  check("왼쪽 목록 모름: 잰다", #trace4 > 0)
+  check("왼쪽 목록 모름: 결과 [100,300)", w4 >= 100 and w4 < 300, "폭 " .. tostring(w4))
+
+  -- satisfied 단독
+  local snapHidden = { sep = { key = "SEP", x = 914 }, chevronX = 1061, expanded = false,
+                       items = { { key = "A", x = 1043 }, { key = "B", x = 1045 }, { key = "R", x = 1085 } } }
+  check("satisfied: 구분자 접힘 + 왼쪽 전부 접힘 + 목록 앎 → 참", fit.satisfied(snapHidden, { "A", "B" }))
+  check("satisfied: 구분자 접힘 + 목록 모름 → 거짓", not fit.satisfied(snapHidden))
+  local snapBack = { sep = { key = "SEP", x = 914 }, chevronX = 1000, expanded = false,
+                     items = { { key = "A", x = 1043 }, { key = "B", x = 1045 }, { key = "R", x = 1085 } } }
+  check("satisfied: 구분자 접힘 + 왼쪽 하나가 보임 → 거짓", not fit.satisfied(snapBack, { "A", "B" }))
+  check("satisfied: 구분자 접힘 + 목록의 항목이 사라짐(앱 종료) → 참", fit.satisfied(snapHidden, { "A", "B", "gone" }))
+end
+
+--------------------------------------------------------------------------
 
 local summary = string.format("%d passed, %d failed", passed, #failures)
 if #failures > 0 then
