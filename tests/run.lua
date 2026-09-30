@@ -904,8 +904,33 @@ do
   local snapBack = { sep = { key = "SEP", x = 914 }, chevronX = 1000, expanded = false,
                      items = { { key = "A", x = 1043 }, { key = "B", x = 1045 }, { key = "R", x = 1085 } } }
   check("satisfied: 구분자 접힘 + 왼쪽 하나가 보임 → 거짓", not fit.satisfied(snapBack, { "A", "B" }))
-  check("satisfied: 구분자 접힘 + 목록의 항목이 사라짐(앱 종료) → 참", fit.satisfied(snapHidden, { "A", "B", "gone" }))
+  -- 목록의 항목이 사라졌으면 왼쪽 구성이 바뀐 것이다 — 폭이 남아돌 수 있으니 다시 잰다
+  check("satisfied: 구분자 접힘 + 목록의 항목이 사라짐(앱 종료) → 거짓", not fit.satisfied(snapHidden, { "A", "B", "gone" }))
+  -- 접히면 AX 에서 사라지는 시스템 항목은 목록에 넣지 않는다 — 넣으면 접힐 때마다 "사라짐"으로 오판한다
+  local snapSys = { sep = { key = "SEP", x = 922 }, chevronX = 898, expanded = false,
+                    items = { { key = "A", x = 880 }, { key = "S", x = 890, system = true }, { key = "R", x = 1085 } } }
+  local keys = fit.leftKeys(snapSys); table.sort(keys)
+  eq("leftKeys: 시스템 항목은 뺀다", table.concat(keys, ","), "A")
 end
+
+--------------------------------------------------------------------------
+-- 39. 예산이 지속적으로 줄면(왼쪽 항목 사라짐) 접힌 구분자를 다시 잰다
+--------------------------------------------------------------------------
+do
+  -- 폭 287 은 옛 구성에 맞춘 값. 항목 G 가 사라졌고 지금 화면에선 구분자까지 접힌다
+  local setWidth, probe, trace = fakeBar.new({
+    order = { "H", "A", "B", "SEP", "R" },
+    hiddenFor = thresholds({
+      { from = 200, hidden = { "H", "A", "B", "SEP" } },
+      { from = 100, hidden = { "H", "A", "B" } },
+    }),
+    width = 287,
+  })
+  local w = fit.decide(setWidth, probe, { currentWidth = 287, leftKeys = { "H", "A", "B", "G" } })
+  check("항목 사라짐: 다시 재서 [100,200) 을 고른다", w >= 100 and w < 200, "폭 " .. tostring(w))
+  check("항목 사라짐: setWidth 를 불렀다", #trace > 0)
+end
+
 
 --------------------------------------------------------------------------
 

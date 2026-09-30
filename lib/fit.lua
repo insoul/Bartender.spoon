@@ -10,7 +10,8 @@ local fit = {}
 ---     chevronX = <number> 또는 nil,   -- « 의 x. 접힌 항목이 없으면 nil
 ---     expanded = <boolean>,           -- » 버튼이 있다. 사용자가 펼쳐 둔 상태다
 ---     pinned   = <boolean>,           -- 카메라·마이크 인디케이터처럼 접히지도 옮겨지지도 않는 시스템 항목이 떠 있다
----     items    = { {key = <string>, x = <number>, w = <number>}, ... },  -- 구분자·고정 항목을 뺀 나머지. w 는 항목 폭
+---     items    = { {key = <string>, x = <number>, w = <number>, system = <boolean>}, ... },
+---                                     -- 구분자·고정 항목을 뺀 나머지. w 는 항목 폭, system 은 MenuBarAgent 항목(접히면 목록에서 사라진다)
 ---   }
 --- 메뉴바 버튼은 세 상태를 가진다:
 ---   « 있음(chevronX)      — 접힌 항목이 있다
@@ -55,13 +56,14 @@ end
 
 --- 구분자가 보일 때, 구분자 왼쪽에 있는 항목들의 key 목록. 구분자가 없거나 접혀 있으면 nil.
 --- 구분자가 접히면 좌표로는 왼쪽 항목을 가릴 수 없으므로(접힌 항목 좌표는 옛값), 보일 때 기억해 두었다가 쓴다.
+--- 시스템 항목(item.system)은 넣지 않는다 — 접히면 AX 목록에서 사라져, 넣으면 접힐 때마다 "사라짐"으로 오판한다.
 --- @param snap table|nil
 --- @return table|nil
 function fit.leftKeys(snap)
   if snap == nil or snap.sep == nil or isHidden(snap, snap.sep.x) then return nil end
   local keys = {}
   for _, item in ipairs(snap.items) do
-    if item.x < snap.sep.x then keys[#keys + 1] = item.key end
+    if item.x < snap.sep.x and not item.system then keys[#keys + 1] = item.key end
   end
   return keys
 end
@@ -73,6 +75,9 @@ end
 --- 왼쪽 항목 다음으로 구분자를 접는데, 왼쪽 항목은 접힌 채 그대로라 손댈 것이 없다. 앱이 바뀌면 시스템이
 --- 배치를 되돌린다 (실측). 이때 왼쪽 항목은 기억한 leftKeys 로 가린다 — 목록을 모르면 판단할 수 없어 거짓이다.
 --- 구분자가 예산보다 넓어 혼자 빠지고 왼쪽 항목이 되살아난 경우는 목록의 항목이 보이므로 거짓이 된다.
+--- 목록의 항목이 사라졌어도(앱 종료) 거짓이다 — 왼쪽 구성이 줄었으면 폭이 남아돌 수 있는데, 구분자가
+--- 접혀 있는 동안은 그걸 알 길이 없으므로 한 번 다시 잰다. 앱 전환처럼 항목은 그대로인 채 예산만 줄어든
+--- 경우와 이걸로 가른다. 화면 구성이 바뀐 경우는 호출자가 목록을 버려서(nil) 다시 재게 한다.
 --- @param snap table|nil
 --- @param leftKeys table|nil 구분자가 마지막으로 보였을 때의 왼쪽 항목 key 목록 (fit.leftKeys)
 --- @return boolean
@@ -84,7 +89,7 @@ function fit.satisfied(snap, leftKeys)
     for _, item in ipairs(snap.items) do byKey[item.key] = item end
     for _, key in ipairs(leftKeys) do
       local item = byKey[key]
-      if item ~= nil and not isHidden(snap, item.x) then return false end
+      if item == nil or not isHidden(snap, item.x) then return false end
     end
     return true
   end

@@ -227,7 +227,7 @@ function obj:probe()
           snap.pinned = true
         else
           local entry = { key = string.format("%d:%d", app:pid(), index), x = position.x,
-                          w = size and size.w or 0 }
+                          w = size and size.w or 0, system = systemAgent }
           if child:attributeValue("AXHelp") == SEP_TOOLTIP then
             snap.sep = entry
           else
@@ -816,7 +816,13 @@ function obj:start()
   self.sep:setMenu(function() return self:menuItems() end)
   self:setWidth(0)
 
-  self.screenWatcher = hs.screen.watcher.new(function() self:schedule() end)
+  -- 화면 구성이 바뀌면 예산이 지속적으로 달라진 것이다. 기억한 왼쪽 목록을 버려, 구분자가 접혀 있어도
+  -- (외장 모니터에서 잰 넓은 폭이 내장 화면에서 남아도는 경우) 한 번 다시 재게 한다
+  self.screenWatcher = hs.screen.watcher.new(function()
+    self.leftKeys = nil
+    self.failSignature = nil
+    self:schedule()
+  end)
   self.screenWatcher:start()
 
   local watcher = hs.application.watcher
