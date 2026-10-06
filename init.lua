@@ -403,14 +403,14 @@ function obj:fit()
   end
 
   local co = coroutine.create(function()
-    local ok, result, failSignature, leftKeys = pcall(function()
+    local ok, result, failSignature, memo = pcall(function()
       local keyset = fit.keyset(self:probe())
       local width, failSig, left = fit.decide(apply, function() return self:probe() end, {
         maxWidth = searchLimit(),
         currentWidth = self.width,
         lastFailSig = self.failSignature,
         hint = keyset and self.widthCache[keyset] or nil,
-        leftKeys = self.leftKeys,
+        memo = self.memo,
         log = function(fmt, ...) self:log(fmt, ...) end,
       })
       -- 성공한 폭을 항목 구성별로 기억한다. 같은 구성이 돌아오면 탐색 없이 한 걸음에 맞춘다.
@@ -427,8 +427,8 @@ function obj:fit()
       self.lastWidth = result
       -- 실패한 배치의 서명을 들고 있다가 다음 호출에 돌려준다. 성공하면 nil 이 되어 기억이 지워진다.
       self.failSignature = failSignature
-      -- 구분자가 보였을 때의 왼쪽 항목 목록. 앱 전환으로 구분자가 접혔을 때 만족 판정에 쓴다.
-      self.leftKeys = leftKeys
+      -- 구분자가 보였을 때의 배치 기억. 앱 전환으로 구분자가 접혔을 때 만족 판정에 쓴다.
+      self.memo = memo
     elseif result ~= ABORTED then
       hs.printf("[Bartender] 탐색 실패: %s", tostring(result))
     end
@@ -789,7 +789,7 @@ function obj:init()
   self.widthCache = {}
   self.lastLog = nil
   self.failSignature = nil
-  self.leftKeys = nil
+  self.memo = nil
   self.suspended = false
   self.placing = false
   self.placeQueue = {}
@@ -816,10 +816,10 @@ function obj:start()
   self.sep:setMenu(function() return self:menuItems() end)
   self:setWidth(0)
 
-  -- 화면 구성이 바뀌면 예산이 지속적으로 달라진 것이다. 기억한 왼쪽 목록을 버려, 구분자가 접혀 있어도
+  -- 화면 구성이 바뀌면 예산이 지속적으로 달라진 것이다. 배치 기억을 버려, 구분자가 접혀 있어도
   -- (외장 모니터에서 잰 넓은 폭이 내장 화면에서 남아도는 경우) 한 번 다시 재게 한다
   self.screenWatcher = hs.screen.watcher.new(function()
-    self.leftKeys = nil
+    self.memo = nil
     self.failSignature = nil
     self:schedule()
   end)

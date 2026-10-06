@@ -851,11 +851,12 @@ do
     hiddenFor = function() return { "H", "A", "B" } end,
     width = 147,
   })
-  local w, sig, leftKeys = fit.decide(setWidth, probe, { currentWidth = 147 })
+  local w, sig, memo = fit.decide(setWidth, probe, { currentWidth = 147 })
   eq("구분자 보임: 만족, 폭 그대로", w, 147)
   eq("구분자 보임: setWidth 안 부름", #trace, 0)
-  table.sort(leftKeys or {})
-  eq("구분자 보임: 왼쪽 항목 목록을 돌려준다", table.concat(leftKeys or {}, ","), "A,B,H")
+  table.sort(memo.left)
+  eq("구분자 보임: 왼쪽 항목 목록을 돌려준다", table.concat(memo.left, ","), "A,B,H")
+  check("구분자 보임: 모든 항목을 기억한다", memo.known.H and memo.known.A and memo.known.B and memo.known.R)
 
   -- Xcode 앞: 시스템이 구분자까지 접었다. 왼쪽은 여전히 접힌 채 → 손대지 않는다
   local setWidth2, probe2, trace2 = fakeBar.new({
@@ -863,12 +864,11 @@ do
     hiddenFor = function() return { "H", "A", "B", "SEP" } end,
     width = 147,
   })
-  local w2, sig2, left2 = fit.decide(setWidth2, probe2, { currentWidth = 147, leftKeys = { "H", "A", "B" } })
+  local w2, sig2, memo2 = fit.decide(setWidth2, probe2, { currentWidth = 147, memo = memo })
   eq("구분자 접힘·왼쪽 접힘: 폭 그대로", w2, 147)
   eq("구분자 접힘·왼쪽 접힘: setWidth 안 부름 (폭 0 으로 내리지 않는다)", #trace2, 0)
   eq("구분자 접힘·왼쪽 접힘: 실패 서명 없음", sig2, nil)
-  table.sort(left2 or {})
-  eq("구분자 접힘: 기억한 왼쪽 목록을 그대로 돌려준다", table.concat(left2 or {}, ","), "A,B,H")
+  eq("구분자 접힘: 받은 기억을 그대로 돌려준다", memo2, memo)
 
   -- 구분자가 너무 넓어 혼자 빠지고 왼쪽 항목이 되살아난 경우 → 불만족, 다시 잰다
   local setWidth3, probe3, trace3 = fakeBar.new({
@@ -879,7 +879,7 @@ do
     }),
     width = 400,
   })
-  local w3 = fit.decide(setWidth3, probe3, { currentWidth = 400, leftKeys = { "H", "A", "B" } })
+  local w3 = fit.decide(setWidth3, probe3, { currentWidth = 400, memo = memo })
   check("구분자 접힘·왼쪽 노출: 다시 재서 [100,300) 을 고른다", w3 >= 100 and w3 < 300, "폭 " .. tostring(w3))
   check("구분자 접힘·왼쪽 노출: setWidth 를 불렀다", #trace3 > 0)
 
@@ -899,18 +899,22 @@ do
   -- satisfied 단독
   local snapHidden = { sep = { key = "SEP", x = 914 }, chevronX = 1061, expanded = false,
                        items = { { key = "A", x = 1043 }, { key = "B", x = 1045 }, { key = "R", x = 1085 } } }
-  check("satisfied: 구분자 접힘 + 왼쪽 전부 접힘 + 목록 앎 → 참", fit.satisfied(snapHidden, { "A", "B" }))
+  local known = { A = true, B = true, R = true }
+  check("satisfied: 구분자 접힘 + 왼쪽 전부 접힘 + 목록 앎 → 참",
+    fit.satisfied(snapHidden, { left = { "A", "B" }, known = known }))
   check("satisfied: 구분자 접힘 + 목록 모름 → 거짓", not fit.satisfied(snapHidden))
   local snapBack = { sep = { key = "SEP", x = 914 }, chevronX = 1000, expanded = false,
                      items = { { key = "A", x = 1043 }, { key = "B", x = 1045 }, { key = "R", x = 1085 } } }
-  check("satisfied: 구분자 접힘 + 왼쪽 하나가 보임 → 거짓", not fit.satisfied(snapBack, { "A", "B" }))
+  check("satisfied: 구분자 접힘 + 왼쪽 하나가 보임 → 거짓",
+    not fit.satisfied(snapBack, { left = { "A", "B" }, known = known }))
   -- 목록의 항목이 사라졌으면 왼쪽 구성이 바뀐 것이다 — 폭이 남아돌 수 있으니 다시 잰다
-  check("satisfied: 구분자 접힘 + 목록의 항목이 사라짐(앱 종료) → 거짓", not fit.satisfied(snapHidden, { "A", "B", "gone" }))
+  check("satisfied: 구분자 접힘 + 목록의 항목이 사라짐(앱 종료) → 거짓",
+    not fit.satisfied(snapHidden, { left = { "A", "B", "gone" }, known = known }))
   -- 접히면 AX 에서 사라지는 시스템 항목은 목록에 넣지 않는다 — 넣으면 접힐 때마다 "사라짐"으로 오판한다
   local snapSys = { sep = { key = "SEP", x = 922 }, chevronX = 898, expanded = false,
                     items = { { key = "A", x = 880 }, { key = "S", x = 890, system = true }, { key = "R", x = 1085 } } }
-  local keys = fit.leftKeys(snapSys); table.sort(keys)
-  eq("leftKeys: 시스템 항목은 뺀다", table.concat(keys, ","), "A")
+  local memoSys = fit.memo(snapSys)
+  eq("memo: 왼쪽 목록에서 시스템 항목은 뺀다", table.concat(memoSys.left, ","), "A")
 end
 
 --------------------------------------------------------------------------
@@ -926,11 +930,37 @@ do
     }),
     width = 287,
   })
-  local w = fit.decide(setWidth, probe, { currentWidth = 287, leftKeys = { "H", "A", "B", "G" } })
+  local memo = { left = { "H", "A", "B", "G" }, known = { H = true, A = true, B = true, G = true, R = true } }
+  local w = fit.decide(setWidth, probe, { currentWidth = 287, memo = memo })
   check("항목 사라짐: 다시 재서 [100,200) 을 고른다", w >= 100 and w < 200, "폭 " .. tostring(w))
   check("항목 사라짐: setWidth 를 불렀다", #trace > 0)
 end
 
+
+--------------------------------------------------------------------------
+-- 40. 기억에 없는 항목이 생겨(앱 실행) 구분자가 접히면 다시 잰다
+--------------------------------------------------------------------------
+do
+  -- 실측 2026-10-06: 오른쪽에 Headroom 항목 N 이 생겨 폭 292 의 구분자가 접혔다. 왼쪽은 접힌 채다
+  local setWidth, probe, trace = fakeBar.new({
+    order = { "H", "A", "B", "SEP", "N", "R" },
+    hiddenFor = thresholds({
+      { from = 200, hidden = { "H", "A", "B", "SEP" } },
+      { from = 100, hidden = { "H", "A", "B" } },
+    }),
+    width = 292,
+  })
+  local memo = { left = { "H", "A", "B" }, known = { H = true, A = true, B = true, R = true } }
+  local w = fit.decide(setWidth, probe, { currentWidth = 292, memo = memo })
+  check("새 항목: 다시 재서 [100,200) 을 고른다", w >= 100 and w < 200, "폭 " .. tostring(w))
+  check("새 항목: setWidth 를 불렀다", #trace > 0)
+
+  -- 새 항목이 접혀 있으면 예산을 쓰지 않는다 — 앱 전환과 같이 손대지 않는다
+  local snapNewHidden = { sep = { key = "SEP", x = 914 }, chevronX = 1061, expanded = false,
+                          items = { { key = "N", x = 1040 }, { key = "A", x = 1043 }, { key = "R", x = 1085 } } }
+  check("satisfied: 구분자 접힘 + 새 항목도 접힘 → 참",
+    fit.satisfied(snapNewHidden, { left = { "A" }, known = { A = true, R = true } }))
+end
 
 --------------------------------------------------------------------------
 

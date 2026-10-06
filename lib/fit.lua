@@ -54,18 +54,21 @@ local function findNeighbor(snap)
   return best
 end
 
---- 구분자가 보일 때, 구분자 왼쪽에 있는 항목들의 key 목록. 구분자가 없거나 접혀 있으면 nil.
+--- 구분자가 보일 때의 배치 기억. 구분자가 없거나 접혀 있으면 nil.
 --- 구분자가 접히면 좌표로는 왼쪽 항목을 가릴 수 없으므로(접힌 항목 좌표는 옛값), 보일 때 기억해 두었다가 쓴다.
---- 시스템 항목(item.system)은 넣지 않는다 — 접히면 AX 목록에서 사라져, 넣으면 접힐 때마다 "사라짐"으로 오판한다.
+---   left  = 구분자 왼쪽 항목 key 목록. 시스템 항목(item.system)은 넣지 않는다 — 접히면 AX 목록에서 사라져,
+---           넣으면 접힐 때마다 "사라짐"으로 오판한다.
+---   known = 그때 있던 모든 항목 key 집합 ({[key] = true}). 구분자가 접힌 동안 새로 생긴 항목을 가린다.
 --- @param snap table|nil
---- @return table|nil
-function fit.leftKeys(snap)
+--- @return table|nil {left = {key, ...}, known = {[key] = true}}
+function fit.memo(snap)
   if snap == nil or snap.sep == nil or isHidden(snap, snap.sep.x) then return nil end
-  local keys = {}
+  local left, known = {}, {}
   for _, item in ipairs(snap.items) do
-    if item.x < snap.sep.x and not item.system then keys[#keys + 1] = item.key end
+    known[item.key] = true
+    if item.x < snap.sep.x and not item.system then left[#left + 1] = item.key end
   end
-  return keys
+  return { left = left, known = known }
 end
 
 --- 지금 폭이 이미 목표 상태인가: 구분자 왼쪽에 보이는 항목이 없다.
@@ -73,21 +76,26 @@ end
 --- 굳이 다시 탐색하면 폭 0 을 거치면서 메뉴바가 깜빡인다.
 --- 구분자 자신이 접혀 있어도 만족일 수 있다: 메뉴가 넓은 앱(Xcode)이 앞에 오면 예산이 줄어 시스템이
 --- 왼쪽 항목 다음으로 구분자를 접는데, 왼쪽 항목은 접힌 채 그대로라 손댈 것이 없다. 앱이 바뀌면 시스템이
---- 배치를 되돌린다 (실측). 이때 왼쪽 항목은 기억한 leftKeys 로 가린다 — 목록을 모르면 판단할 수 없어 거짓이다.
+--- 배치를 되돌린다 (실측). 이때 왼쪽 항목은 기억(memo.left)으로 가린다 — 기억이 없으면 판단할 수 없어 거짓이다.
 --- 구분자가 예산보다 넓어 혼자 빠지고 왼쪽 항목이 되살아난 경우는 목록의 항목이 보이므로 거짓이 된다.
---- 목록의 항목이 사라졌어도(앱 종료) 거짓이다 — 왼쪽 구성이 줄었으면 폭이 남아돌 수 있는데, 구분자가
---- 접혀 있는 동안은 그걸 알 길이 없으므로 한 번 다시 잰다. 앱 전환처럼 항목은 그대로인 채 예산만 줄어든
---- 경우와 이걸로 가른다. 화면 구성이 바뀐 경우는 호출자가 목록을 버려서(nil) 다시 재게 한다.
+--- 앱 전환처럼 항목은 그대로인 채 예산만 줄어든 경우와, 예산이 지속적으로 줄어든 경우를 항목 구성으로 가른다.
+--- 구성이 바뀌었으면 거짓이다 — 구분자가 접혀 있는 동안은 지금 폭이 맞는지 알 길이 없으므로 한 번 다시 잰다.
+---   - 목록의 항목이 사라졌다(앱 종료): 왼쪽 구성이 줄어 폭이 남아돌 수 있다.
+---   - 기억에 없는 항목이 보인다(앱 실행): 그 폭만큼 예산이 줄어 구분자가 밀려난 것이다.
+--- 화면 구성이 바뀐 경우는 호출자가 기억을 버려서(nil) 다시 재게 한다.
 --- @param snap table|nil
---- @param leftKeys table|nil 구분자가 마지막으로 보였을 때의 왼쪽 항목 key 목록 (fit.leftKeys)
+--- @param memo table|nil 구분자가 마지막으로 보였을 때의 배치 기억 (fit.memo)
 --- @return boolean
-function fit.satisfied(snap, leftKeys)
+function fit.satisfied(snap, memo)
   if snap == nil or snap.sep == nil then return false end
   if isHidden(snap, snap.sep.x) then
-    if leftKeys == nil then return false end
+    if memo == nil then return false end
     local byKey = {}
-    for _, item in ipairs(snap.items) do byKey[item.key] = item end
-    for _, key in ipairs(leftKeys) do
+    for _, item in ipairs(snap.items) do
+      byKey[item.key] = item
+      if not memo.known[item.key] and not isHidden(snap, item.x) then return false end
+    end
+    for _, key in ipairs(memo.left) do
       local item = byKey[key]
       if item == nil or not isHidden(snap, item.x) then return false end
     end
@@ -146,38 +154,38 @@ end
 --- 지금 상태가 이미 목표면 폭을 건드리지 않는다.
 --- @param setWidth function(w) 폭을 적용한다. 실제 구현은 메뉴바가 자리를 잡을 때까지 기다린다.
 --- @param probe function() -> snapshot
---- @param opts table|nil {maxWidth=, tolerance=, currentWidth=, lastFailSig=, hint=, leftKeys=, log=function(fmt, ...)}
+--- @param opts table|nil {maxWidth=, tolerance=, currentWidth=, lastFailSig=, hint=, memo=, log=function(fmt, ...)}
 ---                    hint 는 같은 항목 구성(fit.keyset)에서 지난번 성공한 폭. 있으면 먼저 시도한다.
----                    leftKeys 는 지난 호출이 돌려준 왼쪽 항목 목록 — 구분자가 접혀 있을 때 만족 판정에 쓴다
+---                    memo 는 지난 호출이 돌려준 배치 기억 — 구분자가 접혀 있을 때 만족 판정에 쓴다
 --- @return number 적용한 폭
 --- @return string|nil 탐색이 실패한 배치의 서명. 다음 호출에 opts.lastFailSig 로 돌려주면
 ---                    같은 배치에서 같은 탐색을 되풀이하지 않는다. nil 이면 기억을 지운다.
 ---                    판단이 선 경로(만족·수렴)만 nil 을 돌려주고, 아무것도 알아내지 못한
 ---                    경로는 받은 opts.lastFailSig 를 그대로 되돌려 기억을 유지한다
---- @return table|nil 왼쪽 항목 key 목록. 구분자가 보였으면 지금 판독에서 새로 만들고, 아니면 받은 것을 되돌린다.
----                    다음 호출에 opts.leftKeys 로 돌려준다
+--- @return table|nil 배치 기억. 구분자가 보였으면 지금 판독에서 새로 만들고, 아니면 받은 것을 되돌린다.
+---                    다음 호출에 opts.memo 로 돌려준다
 function fit.decide(setWidth, probe, opts)
   opts = opts or {}
   local maxWidth = opts.maxWidth or fit.MAX_WIDTH
   local tolerance = opts.tolerance or fit.TOLERANCE
   local currentWidth = opts.currentWidth or 0
   local log = opts.log or function() end
-  local leftKeys = opts.leftKeys
+  local memo = opts.memo
 
   -- 아무것도 판단하지 못한 경로는 기억한 실패 서명을 그대로 돌려준다.
   -- 여기서 nil 을 돌려주면 기억이 지워져, 상황이 돌아왔을 때 같은 헛탐색을 다시 돈다.
   local snap = probe()
   if snap == nil or snap.sep == nil then
     log("구분자를 메뉴바에서 찾지 못했다")
-    return currentWidth, opts.lastFailSig, leftKeys
+    return currentWidth, opts.lastFailSig, memo
   end
-  leftKeys = fit.leftKeys(snap) or leftKeys
+  memo = fit.memo(snap) or memo
 
   -- 사용자가 « 를 눌러 펼쳐 둔 동안은 개입하지 않는다. 다시 접으면 다음 트리거가 처리한다.
   -- 버튼이 아예 없는 상태는 여기에 해당하지 않는다 — 접힌 것이 없을 뿐이고, 폭을 키우면 접힌다.
   if snap.expanded then
     log("메뉴바가 펼쳐진 상태다 — 폭을 그대로 둔다")
-    return currentWidth, opts.lastFailSig, leftKeys
+    return currentWidth, opts.lastFailSig, memo
   end
 
   -- 고정 항목이 떠 있는 동안도 개입하지 않는다. 시스템이 그 자리를 내느라 구분자를 접어 두는데,
@@ -185,18 +193,18 @@ function fit.decide(setWidth, probe, opts)
   -- 되돌린다. 만족 판정도 미룬다 — 이 상태에서 내린 판단은 항목이 사라지면 틀린 것이 된다.
   if snap.pinned then
     log("카메라·마이크 인디케이터가 떠 있다 — 폭을 그대로 둔다")
-    return currentWidth, opts.lastFailSig, leftKeys
+    return currentWidth, opts.lastFailSig, memo
   end
 
   -- 목표에 닿았으면 기억을 지운다. 배치가 달라졌다는 뜻이다.
-  if fit.satisfied(snap, leftKeys) then
-    return currentWidth, nil, leftKeys
+  if fit.satisfied(snap, memo) then
+    return currentWidth, nil, memo
   end
 
   -- 같은 배치에서 이미 탐색이 실패했으면 또 돌지 않는다. 배치가 바뀌어야 결과가 달라진다.
   if opts.lastFailSig ~= nil and fit.signature(snap, maxWidth) == opts.lastFailSig then
     log("같은 배치에서 이미 실패 — 배치가 바뀔 때까지 건너뜀")
-    return currentWidth, opts.lastFailSig, leftKeys
+    return currentWidth, opts.lastFailSig, memo
   end
 
   -- 출발점. 구분자가 보이면 지금 폭에 "왼쪽에 보이는 항목 폭 합"을 더한 근처가 답이다 —
@@ -215,12 +223,12 @@ function fit.decide(setWidth, probe, opts)
     snap = probe()
     if snap == nil or snap.sep == nil then
       log("구분자를 메뉴바에서 찾지 못했다")
-      return 0, opts.lastFailSig, leftKeys
+      return 0, opts.lastFailSig, memo
     end
-    leftKeys = fit.leftKeys(snap) or leftKeys
+    memo = fit.memo(snap) or memo
     if findNeighbor(snap) == nil then
       log("구분자 왼쪽에 보이는 항목이 없다 — 접을 것이 없다")
-      return 0, nil, leftKeys
+      return 0, nil, memo
     end
     baseX = snap.sep.x
     lo = 0
@@ -289,8 +297,8 @@ function fit.decide(setWidth, probe, opts)
   for _ = 1, fit.MAX_STEPS do
     local r = judge(w)
     if r == "ok" then
-      if w == hint then return w, nil, leftKeys end        -- 지난 답이 그대로 맞는다. 더 줄이지 않는다
-      return shrink(w, lo), nil, leftKeys
+      if w == hint then return w, nil, memo end        -- 지난 답이 그대로 맞는다. 더 줄이지 않는다
+      return shrink(w, lo), nil, memo
     elseif r == "wide" then
       hi = w
     else
@@ -318,7 +326,7 @@ function fit.decide(setWidth, probe, opts)
 
   log("조건을 만족하는 폭이 없다 (0..%d) — 폭 0 으로 둔다", maxWidth)
   setWidth(0)
-  return 0, zeroSig, leftKeys
+  return 0, zeroSig, memo
 end
 
 return fit
