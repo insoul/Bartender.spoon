@@ -82,7 +82,8 @@ local DRAG_STEP_US = 15000
 local ICON_HEIGHT = 22
 --- 핸드오프 배지(폰 글리프)가 차지하는 폭. 구분자 이미지의 오른쪽 끝에 그린다
 local BADGE_WIDTH = 16
---- 핸드오프 항목 감시 주기(초). 타입 목록만 조회하므로 한 번에 20µs 수준이다
+--- 핸드오프 항목과 고정 항목 감시 주기(초). 핸드오프는 타입 목록만, 고정 항목은 MenuBarAgent 하나만
+--- 조회하므로 합쳐서 한 번에 1ms 미만이다 (실측)
 local HANDOFF_POLL = 0.5
 --- 메뉴바 줄로 인정하는 y 범위. 이 밖의 항목은 시스템이 화면 밖에 치워 둔 것이다
 local MENUBAR_ROW_HEIGHT = 40
@@ -96,9 +97,13 @@ local AX_SKIP_FOR = 60
 --- XPC 헬퍼가 그렇다 — Safari 탭마다 하나씩 떠서 타임아웃이 탭 수만큼 쌓인다.
 local AX_SKIP_BUNDLE_PREFIX = "com.apple.WebKit."
 
+--- 시스템 메뉴바 항목(배터리·제어 센터·고정 항목·« 버튼)을 띄우는 프로세스
+local MENUBAR_AGENT_BUNDLE = "com.apple.MenuBarAgent"
+
 --- 시스템이 자리를 고정하는 MenuBarAgent 항목. 접히지 않고 ⌘+드래그로도 옮겨지지 않는다
 --- (macOS 27.0 실측). 떠 있는 동안 시스템이 구분자를 접어 자리를 내고 사라지면 배치를 스스로
---- 되돌리므로, 판독 목록에서 빼고 pinned 로만 알려 탐색이 폭을 건드리지 않게 한다.
+--- 되돌린다. 판독 목록에서 빼고 pinned 로만 알린다 — 떠 있는 동안의 폭은 checkPinned 가 따로 다룬다.
+--- 위치 사용 표시는 여기 없다 — 따로 뜨지 않고 제어 센터 항목 안에 붙어 그 항목을 넓힌다.
 local PINNED_IDS = {
   ["com.apple.menuextra.audiovideo"] = true,   -- 카메라·마이크 사용 중 인디케이터
 }
@@ -204,6 +209,21 @@ local function menuExtras()
   return list
 end
 
+--- 고정 항목이 메뉴바에 떠 있는가. MenuBarAgent 하나만 묻는다 — 전체 판독(실측 60ms)과 달리 폴링해도 싸다.
+local function pinnedShown()
+  local agent = hs.application.applicationsForBundleID(MENUBAR_AGENT_BUNDLE)[1]
+  if agent == nil then return false end
+  local ok, element = pcall(hs.axuielement.applicationElement, agent)
+  if not ok or element == nil then return false end
+  element:setTimeout(AX_TIMEOUT)
+  local extras = element:attributeValue("AXExtrasMenuBar")
+  for _, child in ipairs(extras and extras:attributeValue("AXChildren") or {}) do
+    local position = child:attributeValue("AXPosition")
+    if position and position.y >= 0 and position.y < MENUBAR_ROW_HEIGHT and isPinned(child) then return true end
+  end
+  return false
+end
+
 --- 모든 실행 중 앱의 AXExtrasMenuBar 자식을 모아 fit.decide 가 쓰는 스냅샷으로 만든다.
 --- key 는 pid 와 앱 안에서의 순서로 만든다 — 제목은 시계처럼 매 초 바뀌는 것이 있어 못 쓴다.
 function obj:probe()
@@ -225,6 +245,7 @@ function obj:probe()
           snap.expanded = true
         elseif systemAgent and isPinned(child) then
           snap.pinned = true
+          snap.pinnedWidth = (snap.pinnedWidth or 0) + (size and size.w or 0)
         else
           local entry = { key = string.format("%d:%d", app:pid(), index), x = position.x,
                           w = size and size.w or 0, system = systemAgent }
@@ -411,10 +432,12 @@ function obj:fit()
         lastFailSig = self.failSignature,
         hint = keyset and self.widthCache[keyset] or nil,
         memo = self.memo,
+        pinned = self.pinnedBase ~= nil,
         log = function(fmt, ...) self:log(fmt, ...) end,
       })
       -- 성공한 폭을 항목 구성별로 기억한다. 같은 구성이 돌아오면 탐색 없이 한 걸음에 맞춘다.
-      if keyset and width > 0 and failSig == nil then self.widthCache[keyset] = width end
+      -- 고정 항목이 떠 있는 동안 고른 폭은 그 자리만큼 좁아 고정 항목이 없을 때 맞지 않으므로 넣지 않는다.
+      if keyset and width > 0 and failSig == nil and self.pinnedBase == nil then self.widthCache[keyset] = width end
       return width, failSig, left
     end)
 
@@ -722,6 +745,27 @@ function obj:checkHandoff()
   if self.width < BADGE_WIDTH then self:schedule() end
 end
 
+--- 고정 항목(카메라·마이크 인디케이터)이 뜨고 지는 것을 본다. 시스템은 그 자리를 내느라 구분자를 접는데,
+--- 그동안 구분자 메뉴와 핸드오프 배지를 쓸 수 없으므로 폭을 줄여 구분자를 꺼낸다. 줄이기 전 폭을 기억해 두었다가
+--- 사라지면 되돌린다 — 다시 재면 그 사이 왼쪽 항목이 드러나 깜빡이고, 줄인 폭 그대로 두면 고정 항목 자리만큼
+--- 모자라 왼쪽 항목이 되살아난다. 뜨고 지는 것을 알리는 이벤트가 없어 핸드오프와 같이 폴링한다.
+--- 탐색·옮기기가 도는 동안은 미룬다. 다음 폴링이 다시 본다.
+function obj:checkPinned()
+  if self.running then return end
+  local shown = pinnedShown()
+  if shown and self.pinnedBase == nil then
+    self.pinnedBase = self.width
+    self:schedule()
+  elseif not shown and self.pinnedBase ~= nil then
+    local base = self.pinnedBase
+    self.pinnedBase = nil
+    -- 고정 항목이 떠 있는 동안의 실패 기억은 서명에 고정 항목이 없어 사라진 뒤에도 맞아 버린다
+    self.failSignature = nil
+    if base > self.width then self:setWidth(base) end
+    self:schedule()
+  end
+end
+
 --- file-url 이 가리키는 로컬 파일을 통째로 읽는다. 없거나 못 읽으면 nil 과 오류 문자열.
 --- 파일은 useractivityd 의 Group Container 아래에 있어 TCC 가 막는다 — Hammerspoon 에 "전체 디스크 접근"
 --- 이 없으면 "Operation not permitted" 로 실패한다.
@@ -790,6 +834,7 @@ function obj:init()
   self.lastLog = nil
   self.failSignature = nil
   self.memo = nil
+  self.pinnedBase = nil
   self.suspended = false
   self.placing = false
   self.placeQueue = {}
@@ -866,7 +911,10 @@ function obj:start()
     self:schedule()
   end)
 
-  self.handoffTimer = hs.timer.doEvery(HANDOFF_POLL, function() self:checkHandoff() end)
+  self.handoffTimer = hs.timer.doEvery(HANDOFF_POLL, function()
+    self:checkHandoff()
+    self:checkPinned()
+  end)
   self:checkHandoff()
 
   -- 켜져 있는 시스템 항목도 확인한다. 구분자를 다시 만들었으니 접혀 있을 수 있다.

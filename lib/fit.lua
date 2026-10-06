@@ -37,6 +37,8 @@ fit.MAX_STEPS = 24
 --- « 가 없는 상태에서 시스템이 접지 않고 항목을 노치·앱 메뉴 뒤로 밀어내기만 하면 "아직 보인다"
 --- 판정이 끝나지 않는데, 이 상한이 그 폭주를 막는다. 폭주해도 걸음이 두 배씩 늘어 몇 걸음 안에 닿는다.
 fit.MAX_OVERSHOOT = 400
+--- 보이는 항목 폭 합의 판독 오차. AX 폭은 소수점이 붙어 같은 배치에서도 조금 흔들린다.
+fit.WIDTH_SLACK = 1
 
 local function isHidden(snap, x)
   return snap.chevronX ~= nil and x < snap.chevronX
@@ -54,21 +56,29 @@ local function findNeighbor(snap)
   return best
 end
 
+--- 지금 보이는 항목들의 폭 합. 접힌 항목은 예산을 쓰지 않으므로 빼고, 구분자도 뺀다.
+local function visibleWidth(snap, fromX)
+  local sum = 0
+  for _, item in ipairs(snap.items) do
+    if item.x > fromX and not isHidden(snap, item.x) then sum = sum + (item.w or 0) end
+  end
+  return sum
+end
+
 --- 구분자가 보일 때의 배치 기억. 구분자가 없거나 접혀 있으면 nil.
 --- 구분자가 접히면 좌표로는 왼쪽 항목을 가릴 수 없으므로(접힌 항목 좌표는 옛값), 보일 때 기억해 두었다가 쓴다.
----   left  = 구분자 왼쪽 항목 key 목록. 시스템 항목(item.system)은 넣지 않는다 — 접히면 AX 목록에서 사라져,
----           넣으면 접힐 때마다 "사라짐"으로 오판한다.
----   known = 그때 있던 모든 항목 key 집합 ({[key] = true}). 구분자가 접힌 동안 새로 생긴 항목을 가린다.
+---   left       = 구분자 왼쪽 항목 key 목록. 시스템 항목(item.system)은 넣지 않는다 — 접히면 AX 목록에서
+---                사라져, 넣으면 접힐 때마다 "사라짐"으로 오판한다.
+---   rightWidth = 구분자 오른쪽에 보이는 항목들의 폭 합. 구분자가 접힌 동안 오른쪽이 넓어졌는지 가린다.
 --- @param snap table|nil
---- @return table|nil {left = {key, ...}, known = {[key] = true}}
+--- @return table|nil {left = {key, ...}, rightWidth = <number>}
 function fit.memo(snap)
   if snap == nil or snap.sep == nil or isHidden(snap, snap.sep.x) then return nil end
-  local left, known = {}, {}
+  local left = {}
   for _, item in ipairs(snap.items) do
-    known[item.key] = true
     if item.x < snap.sep.x and not item.system then left[#left + 1] = item.key end
   end
-  return { left = left, known = known }
+  return { left = left, rightWidth = visibleWidth(snap, snap.sep.x) }
 end
 
 --- 지금 폭이 이미 목표 상태인가: 구분자 왼쪽에 보이는 항목이 없다.
@@ -78,10 +88,11 @@ end
 --- 왼쪽 항목 다음으로 구분자를 접는데, 왼쪽 항목은 접힌 채 그대로라 손댈 것이 없다. 앱이 바뀌면 시스템이
 --- 배치를 되돌린다 (실측). 이때 왼쪽 항목은 기억(memo.left)으로 가린다 — 기억이 없으면 판단할 수 없어 거짓이다.
 --- 구분자가 예산보다 넓어 혼자 빠지고 왼쪽 항목이 되살아난 경우는 목록의 항목이 보이므로 거짓이 된다.
---- 앱 전환처럼 항목은 그대로인 채 예산만 줄어든 경우와, 예산이 지속적으로 줄어든 경우를 항목 구성으로 가른다.
---- 구성이 바뀌었으면 거짓이다 — 구분자가 접혀 있는 동안은 지금 폭이 맞는지 알 길이 없으므로 한 번 다시 잰다.
+--- 앱 전환은 항목은 그대로인 채 앱 메뉴만 넓어진 것이다. 항목 쪽이 바뀌었으면 예산이 지속적으로 달라진
+--- 것이므로 거짓이다 — 구분자가 접혀 있는 동안은 지금 폭이 맞는지 알 길이 없으므로 한 번 다시 잰다.
 ---   - 목록의 항목이 사라졌다(앱 종료): 왼쪽 구성이 줄어 폭이 남아돌 수 있다.
----   - 기억에 없는 항목이 보인다(앱 실행): 그 폭만큼 예산이 줄어 구분자가 밀려난 것이다.
+---   - 보이는 항목의 폭 합이 늘었다: 새 항목이 생겼거나(앱 실행) 항목이 넓어져(제어 센터의 위치 화살표)
+---     그만큼 구분자가 밀려난 것이다. 접힌 새 항목은 예산을 쓰지 않으므로 세지 않는다.
 --- 화면 구성이 바뀐 경우는 호출자가 기억을 버려서(nil) 다시 재게 한다.
 --- @param snap table|nil
 --- @param memo table|nil 구분자가 마지막으로 보였을 때의 배치 기억 (fit.memo)
@@ -90,11 +101,9 @@ function fit.satisfied(snap, memo)
   if snap == nil or snap.sep == nil then return false end
   if isHidden(snap, snap.sep.x) then
     if memo == nil then return false end
+    if visibleWidth(snap, -math.huge) > memo.rightWidth + fit.WIDTH_SLACK then return false end
     local byKey = {}
-    for _, item in ipairs(snap.items) do
-      byKey[item.key] = item
-      if not memo.known[item.key] and not isHidden(snap, item.x) then return false end
-    end
+    for _, item in ipairs(snap.items) do byKey[item.key] = item end
     for _, key in ipairs(memo.left) do
       local item = byKey[key]
       if item == nil or not isHidden(snap, item.x) then return false end
@@ -154,8 +163,10 @@ end
 --- 지금 상태가 이미 목표면 폭을 건드리지 않는다.
 --- @param setWidth function(w) 폭을 적용한다. 실제 구현은 메뉴바가 자리를 잡을 때까지 기다린다.
 --- @param probe function() -> snapshot
---- @param opts table|nil {maxWidth=, tolerance=, currentWidth=, lastFailSig=, hint=, memo=, log=function(fmt, ...)}
+--- @param opts table|nil {maxWidth=, tolerance=, currentWidth=, lastFailSig=, hint=, memo=, pinned=, log=function(fmt, ...)}
 ---                    hint 는 같은 항목 구성(fit.keyset)에서 지난번 성공한 폭. 있으면 먼저 시도한다.
+---                    pinned 가 참이면 고정 항목이 떠 있는 동안에도 구분자가 보이도록 폭을 줄인다.
+---                    호출자는 그 전에 지금 폭을 따로 기억해 두었다가 고정 항목이 사라지면 되돌려야 한다
 ---                    memo 는 지난 호출이 돌려준 배치 기억 — 구분자가 접혀 있을 때 만족 판정에 쓴다
 --- @return number 적용한 폭
 --- @return string|nil 탐색이 실패한 배치의 서명. 다음 호출에 opts.lastFailSig 로 돌려주면
@@ -188,16 +199,21 @@ function fit.decide(setWidth, probe, opts)
     return currentWidth, opts.lastFailSig, memo
   end
 
-  -- 고정 항목이 떠 있는 동안도 개입하지 않는다. 시스템이 그 자리를 내느라 구분자를 접어 두는데,
-  -- 폭을 바꿔도 고정 항목은 접히지 않아 탐색이 헛돌고, 항목이 사라지면 시스템이 배치를 스스로
-  -- 되돌린다. 만족 판정도 미룬다 — 이 상태에서 내린 판단은 항목이 사라지면 틀린 것이 된다.
-  if snap.pinned then
+  -- 고정 항목이 떠 있으면 시스템이 그 자리를 내느라 구분자를 접는다. 항목이 사라지면 시스템이 배치를
+  -- 스스로 되돌리므로, 호출자가 폭을 되돌릴 준비를 하지 않았으면(opts.pinned) 손대지 않는다 —
+  -- 여기서 고른 폭은 항목이 사라지면 그만큼 모자라 왼쪽 항목이 되살아난다.
+  if snap.pinned and not opts.pinned then
     log("카메라·마이크 인디케이터가 떠 있다 — 폭을 그대로 둔다")
     return currentWidth, opts.lastFailSig, memo
   end
+  -- 고정 항목 때문에 접힌 것은 앱 전환과 달리 구분자를 꺼내야 하므로, 기억으로 만족을 판정하지 않는다.
+  -- 같은 구성에서 성공한 폭도 고정 항목이 없을 때의 값이라 너무 넓다.
+  local pinnedMode = snap.pinned
+  local hint = opts.hint
+  if pinnedMode then hint = nil end
 
   -- 목표에 닿았으면 기억을 지운다. 배치가 달라졌다는 뜻이다.
-  if fit.satisfied(snap, memo) then
+  if fit.satisfied(snap, (not pinnedMode) and memo or nil) then
     return currentWidth, nil, memo
   end
 
@@ -218,6 +234,14 @@ function fit.decide(setWidth, probe, opts)
     baseX = snap.sep.x + currentWidth   -- 폭 0 일 때의 자리로 환산
     lo = currentWidth
     start = currentWidth + visibleLeftWidth(snap) - fit.ESTIMATE_OFFSET
+  elseif pinnedMode and currentWidth > 0 then
+    -- 고정 항목 자리만큼 예산이 줄어 접혔다. 지금 폭은 그 전에 맞던 값이므로 답은 그 아래, 대략 고정 항목
+    -- 폭만큼 좁은 곳에 있다. 폭 0 으로 내려가면 왼쪽 항목이 모두 드러나 깜빡이므로 위에서 내려온다.
+    -- 이 구간은 여유를 넘는 폭이 아니므로 움직임 검사를 끈다(baseX 를 무한대로 두면 늘 움직인 것이 된다).
+    baseX = math.huge
+    lo = 0
+    hi = currentWidth
+    start = currentWidth - (snap.pinnedWidth or 0)
   else
     setWidth(0)
     snap = probe()
@@ -292,7 +316,6 @@ function fit.decide(setWidth, probe, opts)
   local loProbed = false   -- lo 가 실제 판독으로 확인된 값인가 (처음엔 하한일 뿐이다)
   local w = math.max(lo + 1, math.min(math.floor(start), maxWidth))
   -- 같은 구성에서 성공했던 폭이 있으면 그것부터 본다. 맞으면 한 걸음에 끝난다.
-  local hint = opts.hint
   if hint ~= nil and hint > lo and hint <= maxWidth then w = hint end
   for _ = 1, fit.MAX_STEPS do
     local r = judge(w)
@@ -324,6 +347,12 @@ function fit.decide(setWidth, probe, opts)
     end
   end
 
+  -- 고정 항목이 떠 있을 때는 처음 폭으로 돌아간다. 폭 0 이면 왼쪽 항목이 모두 드러난다.
+  if pinnedMode and currentWidth > 0 then
+    log("고정 항목이 떠 있는 동안 구분자를 꺼낼 폭이 없다 — 폭 %d 를 그대로 둔다", currentWidth)
+    setWidth(currentWidth)
+    return currentWidth, zeroSig, memo
+  end
   log("조건을 만족하는 폭이 없다 (0..%d) — 폭 0 으로 둔다", maxWidth)
   setWidth(0)
   return 0, zeroSig, memo

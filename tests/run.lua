@@ -856,7 +856,7 @@ do
   eq("구분자 보임: setWidth 안 부름", #trace, 0)
   table.sort(memo.left)
   eq("구분자 보임: 왼쪽 항목 목록을 돌려준다", table.concat(memo.left, ","), "A,B,H")
-  check("구분자 보임: 모든 항목을 기억한다", memo.known.H and memo.known.A and memo.known.B and memo.known.R)
+  eq("구분자 보임: 오른쪽에 보이는 폭 합을 기억한다", memo.rightWidth, 30)
 
   -- Xcode 앞: 시스템이 구분자까지 접었다. 왼쪽은 여전히 접힌 채 → 손대지 않는다
   local setWidth2, probe2, trace2 = fakeBar.new({
@@ -899,17 +899,16 @@ do
   -- satisfied 단독
   local snapHidden = { sep = { key = "SEP", x = 914 }, chevronX = 1061, expanded = false,
                        items = { { key = "A", x = 1043 }, { key = "B", x = 1045 }, { key = "R", x = 1085 } } }
-  local known = { A = true, B = true, R = true }
   check("satisfied: 구분자 접힘 + 왼쪽 전부 접힘 + 목록 앎 → 참",
-    fit.satisfied(snapHidden, { left = { "A", "B" }, known = known }))
+    fit.satisfied(snapHidden, { left = { "A", "B" }, rightWidth = 0 }))
   check("satisfied: 구분자 접힘 + 목록 모름 → 거짓", not fit.satisfied(snapHidden))
   local snapBack = { sep = { key = "SEP", x = 914 }, chevronX = 1000, expanded = false,
                      items = { { key = "A", x = 1043 }, { key = "B", x = 1045 }, { key = "R", x = 1085 } } }
   check("satisfied: 구분자 접힘 + 왼쪽 하나가 보임 → 거짓",
-    not fit.satisfied(snapBack, { left = { "A", "B" }, known = known }))
+    not fit.satisfied(snapBack, { left = { "A", "B" }, rightWidth = 0 }))
   -- 목록의 항목이 사라졌으면 왼쪽 구성이 바뀐 것이다 — 폭이 남아돌 수 있으니 다시 잰다
   check("satisfied: 구분자 접힘 + 목록의 항목이 사라짐(앱 종료) → 거짓",
-    not fit.satisfied(snapHidden, { left = { "A", "B", "gone" }, known = known }))
+    not fit.satisfied(snapHidden, { left = { "A", "B", "gone" }, rightWidth = 0 }))
   -- 접히면 AX 에서 사라지는 시스템 항목은 목록에 넣지 않는다 — 넣으면 접힐 때마다 "사라짐"으로 오판한다
   local snapSys = { sep = { key = "SEP", x = 922 }, chevronX = 898, expanded = false,
                     items = { { key = "A", x = 880 }, { key = "S", x = 890, system = true }, { key = "R", x = 1085 } } }
@@ -930,7 +929,7 @@ do
     }),
     width = 287,
   })
-  local memo = { left = { "H", "A", "B", "G" }, known = { H = true, A = true, B = true, G = true, R = true } }
+  local memo = { left = { "H", "A", "B", "G" }, rightWidth = 30 }
   local w = fit.decide(setWidth, probe, { currentWidth = 287, memo = memo })
   check("항목 사라짐: 다시 재서 [100,200) 을 고른다", w >= 100 and w < 200, "폭 " .. tostring(w))
   check("항목 사라짐: setWidth 를 불렀다", #trace > 0)
@@ -938,7 +937,7 @@ end
 
 
 --------------------------------------------------------------------------
--- 40. 기억에 없는 항목이 생겨(앱 실행) 구분자가 접히면 다시 잰다
+-- 40. 오른쪽에 보이는 폭이 늘어(앱 실행·위치 화살표) 구분자가 접히면 다시 잰다
 --------------------------------------------------------------------------
 do
   -- 실측 2026-10-06: 오른쪽에 Headroom 항목 N 이 생겨 폭 292 의 구분자가 접혔다. 왼쪽은 접힌 채다
@@ -950,16 +949,79 @@ do
     }),
     width = 292,
   })
-  local memo = { left = { "H", "A", "B" }, known = { H = true, A = true, B = true, R = true } }
+  local memo = { left = { "H", "A", "B" }, rightWidth = 30 }
   local w = fit.decide(setWidth, probe, { currentWidth = 292, memo = memo })
   check("새 항목: 다시 재서 [100,200) 을 고른다", w >= 100 and w < 200, "폭 " .. tostring(w))
   check("새 항목: setWidth 를 불렀다", #trace > 0)
 
   -- 새 항목이 접혀 있으면 예산을 쓰지 않는다 — 앱 전환과 같이 손대지 않는다
   local snapNewHidden = { sep = { key = "SEP", x = 914 }, chevronX = 1061, expanded = false,
-                          items = { { key = "N", x = 1040 }, { key = "A", x = 1043 }, { key = "R", x = 1085 } } }
+                          items = { { key = "N", x = 1040, w = 40 }, { key = "A", x = 1043, w = 30 },
+                                    { key = "R", x = 1085, w = 30 } } }
   check("satisfied: 구분자 접힘 + 새 항목도 접힘 → 참",
-    fit.satisfied(snapNewHidden, { left = { "A" }, known = { A = true, R = true } }))
+    fit.satisfied(snapNewHidden, { left = { "A" }, rightWidth = 30 }))
+
+  -- 있던 항목이 넓어졌다 — 제어 센터에 위치 화살표가 붙은 경우
+  local function snapWithR(w)
+    return { sep = { key = "SEP", x = 914 }, chevronX = 1061, expanded = false,
+             items = { { key = "A", x = 1043, w = 30 }, { key = "R", x = 1085, w = w } } }
+  end
+  check("satisfied: 구분자 접힘 + 오른쪽 항목이 넓어짐 → 거짓",
+    not fit.satisfied(snapWithR(56), { left = { "A" }, rightWidth = 30 }))
+  check("satisfied: 구분자 접힘 + 폭 판독 오차 → 참",
+    fit.satisfied(snapWithR(30.5), { left = { "A" }, rightWidth = 30 }))
+end
+
+--------------------------------------------------------------------------
+-- 41. 고정 항목이 떠 있는 동안 opts.pinned 면 구분자가 보이도록 위에서 내려오며 줄인다
+--------------------------------------------------------------------------
+do
+  local function minOf(t) local m = math.huge for _, v in ipairs(t) do m = math.min(m, v) end return m end
+
+  -- (a) 인디케이터 자리만큼 예산이 줄어 160 에서 접혔다. 답은 [100,140)
+  local setWidth, probe, trace = fakeBar.new({
+    order = { "H", "A", "SEP", "B" },
+    hiddenFor = thresholds({
+      { from = 140, hidden = { "H", "A", "SEP" } },
+      { from = 100, hidden = { "H", "A" } },
+    }),
+    width = 160,
+    pinned = true,
+    pinnedWidth = 20,
+  })
+  local w = fit.decide(setWidth, probe, {
+    currentWidth = 160, pinned = true, hint = 160,
+    memo = { left = { "H", "A" }, rightWidth = 30 },
+  })
+  check("고정 항목 줄이기: [100,140) 을 고른다", w >= 100 and w < 140, "폭 " .. tostring(w))
+  check("고정 항목 줄이기: 폭 0 을 거치지 않는다", minOf(trace) > 0, "최소 " .. tostring(minOf(trace)))
+  eq("고정 항목 줄이기: 인디케이터 폭만큼 줄인 자리에서 출발한다", trace[1], 140)
+
+  -- (b) 만족하는 폭이 없으면 처음 폭으로 돌아간다 — 폭 0 이면 왼쪽 항목이 모두 드러난다
+  local setWidth2, probe2, trace2 = fakeBar.new({
+    order = { "H", "A", "SEP", "B" },
+    hiddenFor = thresholds({
+      { from = 100, hidden = { "H", "A", "SEP" } },
+    }),
+    width = 160,
+    pinned = true,
+    pinnedWidth = 20,
+  })
+  local w2 = fit.decide(setWidth2, probe2, { currentWidth = 160, pinned = true })
+  eq("고정 항목 실패: 처음 폭을 돌려준다", w2, 160)
+  eq("고정 항목 실패: 마지막으로 처음 폭을 적용한다", trace2[#trace2], 160)
+
+  -- (c) 구분자가 보이고 왼쪽이 다 접혀 있으면 손대지 않는다
+  local setWidth3, probe3, trace3 = fakeBar.new({
+    order = { "H", "A", "SEP", "B" },
+    hiddenFor = function() return { "H", "A" } end,
+    width = 120,
+    pinned = true,
+    pinnedWidth = 20,
+  })
+  local w3 = fit.decide(setWidth3, probe3, { currentWidth = 120, pinned = true })
+  eq("고정 항목 만족: 폭 그대로", w3, 120)
+  eq("고정 항목 만족: setWidth 안 부름", #trace3, 0)
 end
 
 --------------------------------------------------------------------------
