@@ -4,6 +4,8 @@
 --- 순수 Lua — hs.* 를 쓰지 않는다.
 
 local CHEVRON_X = 900
+--- « 버튼 폭 (macOS 27.0 실측 17.5)
+local CHEVRON_W = 18
 local STEP = 20
 
 local fakeBar = {}
@@ -16,6 +18,7 @@ local fakeBar = {}
 ---   noChevron  true 면 접힌 항목이 없을 때 버튼 자체가 없는 것으로 본다 (여유가 많은 화면)
 ---   deadZone   이 폭 이상은 시스템이 배치에 반영하지 않는다 (폭 0 과 같은 판독값)
 ---   vanish     key 집합. 접히면 판독 목록에서 아예 빠지는 항목 (시스템 항목이 그렇다)
+---   stale      key 집합. 접혀도 좌표를 갱신하지 않는 항목 (Slack 이 그렇다). 접히면 « 버튼 프레임 안의 좌표를 알린다
 ---   pinned     true 면 카메라·마이크 인디케이터 같은 고정 항목이 떠 있는 것으로 본다
 ---   pinnedWidth 고정 항목의 폭 (pinned 일 때)
 ---   widths     key → 항목 폭. 없으면 30
@@ -44,6 +47,7 @@ function fakeBar.new(opts)
     local snap = {
       items = {},
       chevronX = anyHidden and CHEVRON_X or nil,
+      chevronW = anyHidden and CHEVRON_W or nil,
       -- 접힌 것이 없을 때: 여유가 빠듯하면 » 가 있고, 아주 많으면 버튼 자체가 없다
       expanded = (not anyHidden) and not opts.noChevron,
       pinned = opts.pinned or false,
@@ -53,8 +57,12 @@ function fakeBar.new(opts)
     local passedSep = false
     for _, key in ipairs(opts.order) do
       local x
+      local frozen = false
       if hidden[key] and opts.vanish and opts.vanish[key] then
         x = nil                                   -- 접히면 목록에서 사라진다
+      elseif hidden[key] and opts.stale and opts.stale[key] then
+        x = CHEVRON_X + CHEVRON_W / 2             -- 접히기 전 자리에 남는데, 그 자리를 « 가 차지했다
+        frozen = true
       elseif hidden[key] then
         foldRank = foldRank + 1
         x = CHEVRON_X - 100 + foldRank            -- « 왼쪽에 순서대로 몰린다
@@ -64,7 +72,7 @@ function fakeBar.new(opts)
       end
       -- 구분자는 폭만큼 왼쪽으로 자라고, 그 왼쪽 항목들도 같이 밀린다.
       -- 반영되지 않은 폭에서는 아무도 움직이지 않는다.
-      if x ~= nil and not passedSep then x = x - effective end
+      if x ~= nil and not passedSep and not frozen then x = x - effective end
       if key == "SEP" then
         passedSep = true
         if not opts.noSep then snap.sep = { key = key, x = x } end

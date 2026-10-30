@@ -1025,6 +1025,23 @@ do
 end
 
 --------------------------------------------------------------------------
+-- 42. 접혀도 좌표를 갱신하지 않는 항목(Slack)이 « 버튼 프레임 안의 좌표를 알려도 접힌 것으로 본다
+--------------------------------------------------------------------------
+do
+  local setWidth, probe = fakeBar.new({
+    order = { "H", "A", "SEP", "B" },
+    hiddenFor = thresholds({
+      { from = 300, hidden = { "H", "A", "SEP" } },
+      { from = 100, hidden = { "H", "A" } },
+    }),
+    stale = { A = true },
+  })
+  local w, failSig = fit.decide(setWidth, probe)
+  check("좌표 갱신 안 함: 결과가 [100,300) 안", w >= 100 and w < 300, "폭 " .. tostring(w))
+  eq("좌표 갱신 안 함: 실패로 기억하지 않는다", failSig, nil)
+end
+
+--------------------------------------------------------------------------
 
 local summary = string.format("%d passed, %d failed", passed, #failures)
 if #failures > 0 then

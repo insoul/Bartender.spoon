@@ -241,6 +241,7 @@ function obj:probe()
         local description = child:attributeValue("AXDescription")
         if description == CHEVRON_HIDDEN then
           snap.chevronX = position.x
+          snap.chevronW = size and size.w or 0
         elseif description == CHEVRON_EXPANDED then
           snap.expanded = true
         elseif systemAgent and isPinned(child) then
@@ -290,7 +291,7 @@ function obj:menuItems()
     state.expanded = snap.expanded
     state.hidden = 0
     for _, item in ipairs(snap.items) do
-      if snap.chevronX ~= nil and item.x < snap.chevronX then
+      if fit.isHidden(snap, item.x) then
         state.hidden = state.hidden + 1
       end
     end

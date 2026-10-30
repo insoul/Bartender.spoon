@@ -8,6 +8,7 @@ local fit = {}
 ---   {
 ---     sep      = {key = <string>, x = <number>} 또는 nil,
 ---     chevronX = <number> 또는 nil,   -- « 의 x. 접힌 항목이 없으면 nil
+---     chevronW = <number> 또는 nil,   -- « 버튼 폭
 ---     expanded = <boolean>,           -- » 버튼이 있다. 사용자가 펼쳐 둔 상태다
 ---     pinned   = <boolean>,           -- 카메라·마이크 인디케이터처럼 접히지도 옮겨지지도 않는 시스템 항목이 떠 있다
 ---     items    = { {key = <string>, x = <number>, w = <number>, system = <boolean>}, ... },
@@ -19,6 +20,9 @@ local fit = {}
 ---   버튼 없음(둘 다 없음) — 여유가 많아 접힌 것이 없을 뿐이다. 폭을 키우면 « 가 생긴다
 --- 접힘 판정은 좌표 자체가 아니라 반드시 « 와의 비교로 한다.
 --- 접힌 항목의 x 는 옛 값이거나 « 쪽으로 몰린 값이라 절대 좌표로는 판정할 수 없다.
+--- 경계는 « 의 x 가 아니라 « 버튼의 오른쪽 끝이다. 보이는 항목은 버튼 프레임 안에서 시작할 수 없다.
+--- 접혀도 좌표를 갱신하지 않는 앱(Slack)이 있는데, 맨 왼쪽 항목이면 그 옛 좌표가 « 버튼 프레임 안에 놓인다
+--- (실측: « 870.5 폭 17.5, Slack 882). « 의 x 와만 비교하면 이 항목이 끝내 보이는 것으로 읽혀 탐색이 실패한다.
 
 --- 주 화면 폭을 모를 때 쓰는 탐색 상한. 실제로는 opts.maxWidth 로 주 화면 폭을 넘겨받는다.
 fit.MAX_WIDTH = 600
@@ -40,9 +44,15 @@ fit.MAX_OVERSHOOT = 400
 --- 보이는 항목 폭 합의 판독 오차. AX 폭은 소수점이 붙어 같은 배치에서도 조금 흔들린다.
 fit.WIDTH_SLACK = 1
 
-local function isHidden(snap, x)
-  return snap.chevronX ~= nil and x < snap.chevronX
+--- 좌표 x 의 항목이 접혔는가. « 버튼 오른쪽 끝보다 왼쪽에서 시작하면 접힌 것이다.
+--- @param snap table
+--- @param x number
+--- @return boolean
+function fit.isHidden(snap, x)
+  if snap.chevronX == nil then return false end
+  return x < snap.chevronX + (snap.chevronW or 0) - fit.WIDTH_SLACK
 end
+local isHidden = fit.isHidden
 
 --- 구분자 왼쪽에서 지금 보이는 항목 중 가장 오른쪽 것.
 --- 이미 접혀 있는 항목은 어차피 접힌 채로 둘 것이므로 후보에서 뺀다.

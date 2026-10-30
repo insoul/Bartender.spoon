@@ -85,7 +85,7 @@ spoon.Bartender:fetchHandoff() -- 메뉴 대신 코드로 가져오기
 ```sh
 osascript -e 'tell application "Hammerspoon" to execute lua code
   "return dofile(\"/Users/insoul/.hammerspoon/Spoons/Bartender.spoon/tests/run.lua\")"'
-# => 264 passed, 0 failed
+# => 266 passed, 0 failed
 ```
 
 실패하면 `error` 로 올라오므로 osascript 가 0 이 아닌 상태로 끝난다.
@@ -129,8 +129,9 @@ iPhone 에서 복사하면(Universal Clipboard) 구분자 빈칸 오른쪽 끝�
 이 Spoon 은 문서화된 API 가 아니라 macOS 27.0 의 관찰된 동작에 기댄다. **OS 를 올린 뒤에는
 `docs/design.md` 의 실측 항목을 다시 확인한다.**
 
-- 접힘 판정은 항목 AX x 와 `«` 의 x 비교로만 한다. 접힌 항목의 좌표는 옛 값이거나 `«` 쪽으로
-  몰린 값이라 절대 좌표로는 판정할 수 없다.
+- 접힘 판정은 항목 AX x 와 `«` 버튼 오른쪽 끝의 비교로만 한다. 접힌 항목의 좌표는 옛 값이거나 `«` 쪽으로
+  몰린 값이라 절대 좌표로는 판정할 수 없다. 옛 값은 `«` 버튼 프레임 안에 놓이기도 한다 — 맨 왼쪽 항목이
+  접혀도 좌표를 갱신하지 않으면 그렇다(Slack, 실측 `«` 870.5 폭 17.5, Slack 882).
 - `«` 는 접힌 항목이 있을 때만 AX description 이 `Show Hidden Menu Bar Items` 다.
   접힌 것이 없으면 같은 버튼이 `Hide Menu Bar Items`(`»`) 로 바뀐다.
 - 구분자 식별은 `setTooltip` 이 AX `AXHelp` 로 실리는 것에 의존한다.
